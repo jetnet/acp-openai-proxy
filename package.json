@@ -10,6 +10,7 @@
         "start": "node src/index.js --config config.json",
         "write-config": "node src/index.js --write-default-config config.json",
         "test": "node --test tests/proxy.test.js",
+        "test:live": "node scripts/live-smoke.mjs",
         "check": "node --check src/acpClient.js && node --check src/config.js && node --check src/index.js && node --check src/logger.js && node --check src/openaiCompat.js && node --check src/router.js && node --check src/server.js && node --check src/util.js && node --check tests/proxy.test.js"
     },
     "engines": {
