@@ -215,11 +215,19 @@ export class AcpConnection {
         );
         this.info = result?.agentInfo ?? {};
         this.capabilities = result?.agentCapabilities ?? {};
+        this.authMethods = Array.isArray(result?.authMethods) ? result.authMethods : [];
         this.logger.info?.("ACP agent initialized", {
             agent: this.config.instanceId,
             name: this.info?.name,
             version: this.info?.version,
+            auth_methods: this.authMethods.length || undefined,
         });
+        if (this.authMethods.length && !this.config.assumeAuthed) {
+            this.logger.warn?.("ACP agent declares authMethods; pre-authenticate the CLI or set agents[].assume_authed: true to suppress this warning", {
+                agent: this.config.instanceId,
+                authMethods: this.authMethods,
+            });
+        }
         return result;
     }
     async request(

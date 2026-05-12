@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm run check
+      - run: npm test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: check-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg ACP_PROXY_VERSION=$(node -p "require('./package.json').version") \
+            -t acp-openai-proxy:ci .
+      - name: Boot smoke test
+        run: |
+          # --help should exit 0 inside the image without spawning agents
+          docker run --rm acp-openai-proxy:ci --help

@@ -59,6 +59,19 @@ export function checkSingleChoice(body) { const raw = body?.n ?? 1; const n = Nu
 export function checkTools(body) { const tools = body?.tools ?? []; const functions = body?.functions ?? []; const toolChoice = body?.tool_choice ?? body?.toolChoice; const functionCall = body?.function_call ?? body?.functionCall; if ((Array.isArray(tools) && tools.length) || (Array.isArray(functions) && functions.length) || ![undefined, null, 'none'].includes(toolChoice) || ![undefined, null, 'none'].includes(functionCall)) throw new BadRequest('OpenAI request-level tools are only supported on /v1/chat/completions by this proxy.'); }
 export function modelOrDefault(body, defaultModel) { const model = body?.model ?? defaultModel; if (!model || typeof model !== 'string') throw new BadRequest('model must be a string'); return model; }
 
+const IGNORED_OPENAI_FIELDS = ['temperature', 'top_p', 'top_logprobs', 'logprobs', 'response_format', 'parallel_tool_calls', 'logit_bias', 'seed', 'modalities', 'presence_penalty', 'frequency_penalty'];
+const warnedIgnoredFields = new Set();
+export function noteIgnoredOpenAiFields(body, logger) {
+  if (!body || typeof body !== 'object') return;
+  for (const field of IGNORED_OPENAI_FIELDS) {
+    if (body[field] !== undefined && !warnedIgnoredFields.has(field)) {
+      warnedIgnoredFields.add(field);
+      logger?.info?.('ignoring unsupported OpenAI request field', { field });
+    }
+  }
+}
+export function resetIgnoredFieldWarnings() { warnedIgnoredFields.clear(); }
+
 export function buildChatPrompt(body, agentCapabilities = {}) {
   checkSingleChoice(body);
   const messages = body?.messages;
@@ -134,7 +147,8 @@ export function normalizeToolChoice(body) {
 export function extractClientToolCalls(text, body) {
   const context = clientToolContext(body);
   if (!context.enabled) return [];
-  const parsed = parseToolCallEnvelope(text);
+  const loose = Boolean(body?.compat?.loose_tool_json ?? body?.compat?.looseToolJson);
+  const parsed = parseToolCallEnvelope(text, loose);
   if (!parsed) return [];
   const allowed = new Set(context.tools.map((tool) => tool.function.name));
   const calls = [];
@@ -183,8 +197,8 @@ function normalizeFunctionTool(fn) {
   if (fn.strict !== undefined) normalized.strict = Boolean(fn.strict);
   return { type: 'function', function: normalized };
 }
-function parseToolCallEnvelope(text) {
-  for (const candidate of toolJsonCandidates(text)) {
+function parseToolCallEnvelope(text, loose) {
+  for (const candidate of toolJsonCandidates(text, loose)) {
     try {
       const value = JSON.parse(candidate);
       if (Array.isArray(value)) return value;
@@ -195,19 +209,21 @@ function parseToolCallEnvelope(text) {
   }
   return null;
 }
-function toolJsonCandidates(text) {
+function toolJsonCandidates(text, loose) {
   const trimmed = String(text ?? '').trim();
   const candidates = [];
   if (trimmed) candidates.push(trimmed);
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   if (fence) candidates.push(fence[1].trim());
-  for (const marker of ['"tool_calls"', '"toolCalls"', '"name"']) {
-    const index = trimmed.indexOf(marker);
-    if (index < 0) continue;
-    const open = Math.max(trimmed.lastIndexOf('{', index), trimmed.lastIndexOf('[', index));
-    if (open < 0) continue;
-    const extracted = balancedJsonSlice(trimmed, open);
-    if (extracted) candidates.push(extracted);
+  if (loose) {
+    for (const marker of ['"tool_calls"', '"toolCalls"', '"name"']) {
+      const index = trimmed.indexOf(marker);
+      if (index < 0) continue;
+      const open = Math.max(trimmed.lastIndexOf('{', index), trimmed.lastIndexOf('[', index));
+      if (open < 0) continue;
+      const extracted = balancedJsonSlice(trimmed, open);
+      if (extracted) candidates.push(extracted);
+    }
   }
   return [...new Set(candidates)];
 }

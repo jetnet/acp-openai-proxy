@@ -21,7 +21,8 @@ import {
   now,
   clientToolContext,
   extractClientToolCalls,
-  validateResourceLinks
+  validateResourceLinks,
+  noteIgnoredOpenAiFields
 } from './openaiCompat.js';
 import {
   createRuntimesAndPools,
@@ -39,6 +40,8 @@ const PERMISSIVE_CAPS = { promptCapabilities: { image: true, audio: true, embedd
 export function createProxyServer(config, { logger = createLogger() } = {}) {
   const manager = new ProxyManager(config, logger);
   const server = http.createServer((req, res) => {
+    req.requestId = makeId('req');
+    res.setHeader('x-request-id', req.requestId);
     logRequest(manager.logger, req, res);
     handleRequest(manager, req, res).catch((error) => sendCaughtError(manager, res, error));
   });
@@ -183,6 +186,7 @@ function handleModel(manager, res, model) {
 }
 
 function runtimeHealth(runtime) {
+  const authMethods = runtime.connection?.authMethods ?? [];
   return {
     id: runtime.runtimeId,
     name: runtime.config.name,
@@ -194,7 +198,9 @@ function runtimeHealth(runtime) {
     last_error: runtime.lastError,
     last_failure_at: runtime.lastFailureAt,
     last_success_at: runtime.lastSuccessAt,
-    cooldown_remaining_seconds: runtime.cooldownRemainingSeconds
+    cooldown_remaining_seconds: runtime.cooldownRemainingSeconds,
+    auth_required: authMethods.length > 0 && !runtime.config.assumeAuthed,
+    auth_methods: authMethods.length ? authMethods.map((m) => m?.id ?? m?.name ?? m) : undefined
   };
 }
 
@@ -206,6 +212,7 @@ function validateRequest(body, kind) {
 
 async function handleChat(manager, req, res) {
   const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
+  noteIgnoredOpenAiFields(body, manager.logger);
   const model = modelOrDefault(body, manager.defaultModel);
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'chat');
@@ -226,6 +233,7 @@ async function handleChat(manager, req, res) {
 
 async function handleCompletion(manager, req, res) {
   const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
+  noteIgnoredOpenAiFields(body, manager.logger);
   const model = modelOrDefault(body, manager.defaultModel);
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'completion');
@@ -245,6 +253,7 @@ async function handleCompletion(manager, req, res) {
 
 async function handleResponses(manager, req, res) {
   const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
+  noteIgnoredOpenAiFields(body, manager.logger);
   const model = modelOrDefault(body, manager.defaultModel);
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'responses');
@@ -492,6 +501,7 @@ function logRequest(logger, req, res) {
     const url = new URL(req.url || '/', 'http://localhost');
     const level = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
     logger[level]('http request', {
+      request_id: req.requestId,
       method: req.method,
       path: url.pathname,
       status: res.statusCode,

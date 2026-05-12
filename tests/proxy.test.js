@@ -490,6 +490,71 @@ test('env_passthrough wildcard inherits all parent env to agent', async () => {
   }
 });
 
+test('X-ACP-Routing-Key header keeps requests on the same runtime under sticky_failover', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'sticky_failover', maxRetries: 1 },
+    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+  }, async ({ baseUrl }) => {
+    const seen = [];
+    for (let i = 0; i < 4; i += 1) {
+      const r = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer secret', 'x-acp-routing-key': 'header-keyed' },
+        body: JSON.stringify({ model: 'gemini', messages: [{ role: 'user', content: `turn ${i}` }] })
+      });
+      assert.equal(r.status, 200);
+      seen.push(r.headers.get('x-acp-agent'));
+    }
+    assert.equal(new Set(seen).size, 1, 'X-ACP-Routing-Key should pin sticky_failover to one agent');
+  });
+});
+
+test('least_busy strategy picks the idle runtime', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'least_busy', maxRetries: 1 },
+    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'pick one' }] });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('x-acp-agent') ?? '', /gemini-[ab]/);
+  });
+});
+
+test('agent exit mid-stream surfaces a clean error to the client', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1, failureCooldownSeconds: 0 },
+    agents: [agent('gemini', 'a', { ACP_FAKE_FAIL_PROMPT: 'exit' })]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'crash please' }] });
+    assert.ok(r.status === 502 || r.status === 503, `expected 502/503 for agent exit; got ${r.status}`);
+    const body = await r.json();
+    assert.ok(body.error, 'response should be an OpenAI-shaped error');
+  });
+});
+
+test('extractClientToolCalls is strict by default and loose under compat flag', async () => {
+  const { extractClientToolCalls } = await import('../src/openaiCompat.js');
+  const body = {
+    tools: [{ type: 'function', function: { name: 'foo', parameters: { type: 'object', properties: {} } } }],
+    tool_choice: 'auto'
+  };
+  const envelope = '{"tool_calls":[{"name":"foo","arguments":{}}]}';
+  assert.equal(extractClientToolCalls(envelope, body).length, 1, 'pure JSON envelope still extracts');
+  const prose = `Sure thing, let me call this for you: ${envelope}`;
+  assert.equal(extractClientToolCalls(prose, body).length, 0, 'prose with embedded JSON must NOT extract by default');
+  assert.equal(extractClientToolCalls(prose, { ...body, compat: { loose_tool_json: true } }).length, 1, 'loose mode restores embedded extraction');
+});
+
+test('responses carry an x-request-id header', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await fetch(`${baseUrl}/health`);
+    assert.match(r.headers.get('x-request-id') ?? '', /^req_[0-9a-f]+$/);
+  });
+});
+
 test('/readyz returns 200 when no startAtBoot agents are configured', async () => {
   await withApp({
     server: { ...baseServer },

@@ -128,7 +128,8 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
       startupTimeoutSeconds: numRange(item.startup_timeout_seconds ?? item.startupTimeoutSeconds ?? item.startup_timeout ?? item.startupTimeout ?? 30, `agent ${name}.startup_timeout_seconds`, { min: 1, max: 3600 }),
       requestTimeoutSeconds: numRange(item.request_timeout_seconds ?? item.requestTimeoutSeconds ?? server.requestTimeoutSeconds, `agent ${name}.request_timeout_seconds`, { min: 1, max: 86400 }),
       envPassthrough: item.env_passthrough !== undefined || item.envPassthrough !== undefined ? strList(item.env_passthrough ?? item.envPassthrough ?? [], `agent ${name}.env_passthrough`) : server.envPassthrough,
-      maxQueueDepth: intRange(item.max_queue_depth ?? item.maxQueueDepth ?? 8, `agent ${name}.max_queue_depth`, { min: 0, max: 10000 })
+      maxQueueDepth: intRange(item.max_queue_depth ?? item.maxQueueDepth ?? 8, `agent ${name}.max_queue_depth`, { min: 0, max: 10000 }),
+      assumeAuthed: asBool(item.assume_authed ?? item.assumeAuthed, false)
     };
     if (!agent.command) throw new Error(`agent ${name} command must not be empty`);
     return agent;

@@ -1,6 +1,6 @@
 {
     "name": "acp-openai-proxy",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Dependency-light OpenAI-compatible HTTP proxy for ACP agents.",
     "type": "module",
     "bin": {
