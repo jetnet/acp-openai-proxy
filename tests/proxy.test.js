@@ -135,6 +135,49 @@ test('agent env supports {var:NAME} expansion and rejects removed env_sections',
   }
 });
 
+test('model_selection works with the Gemini CLI extension (models.availableModels + session/set_model)', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
+    agents: [{
+      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite' }),
+      models: ['flash-lite', 'flash', 'pro'],
+      model_selection: {
+        required: true,
+        values: {
+          'pro': 'gemini-2.5-pro',
+          'flash': 'gemini-2.5-flash',
+          'flash-lite': 'gemini-2.5-flash-lite'
+        }
+      }
+    }]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'pro', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.match(body.choices[0].message.content, /Echo\[a\/gemini-2\.5-pro\]/);
+
+    const flashLite = await post(baseUrl, { model: 'flash-lite', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(flashLite.status, 200);
+    assert.match((await flashLite.json()).choices[0].message.content, /Echo\[a\/gemini-2\.5-flash-lite\]/);
+  });
+});
+
+test('model_selection (gemini) rejects unmapped model when required', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1, failureCooldownSeconds: 0 },
+    agents: [{
+      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-pro,gemini-2.5-flash' }),
+      models: ['gemini'],
+      model_selection: { required: true, values: { 'gemini': 'gemini-9.9-unobtainium' } }
+    }]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hi' }] });
+    assert.ok(r.status === 502 || r.status === 400, `expected 4xx/5xx; got ${r.status}`);
+    const body = await r.json();
+    assert.match(body.error.message, /availableModels does not include modelId/);
+  });
+});
+
 test('model_selection maps OpenAI model ids to ACP session config values', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },

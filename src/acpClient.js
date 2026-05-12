@@ -304,8 +304,16 @@ export class AcpConnection {
             sessionId,
             configOptions:
                 result?.configOptions ?? result?.config_options ?? [],
+            models: result?.models ?? null,
             modes: result?.modes ?? null,
         };
+    }
+    async setSessionModel(sessionId, modelId) {
+        return await this.request(
+            "session/set_model",
+            { sessionId, modelId },
+            this.config.requestTimeoutSeconds,
+        );
     }
     async newSession() {
         return (await this.newSessionInfo()).sessionId;
@@ -650,9 +658,32 @@ export class AgentRuntime {
 function applyRequestedModel(conn, config, session, requestedModel) {
     const selection = config.modelSelection;
     if (!selection || !requestedModel) return Promise.resolve();
-    const configOptions = Array.isArray(session?.configOptions)
-        ? session.configOptions
-        : [];
+    const type = selection.type || "auto";
+    const standardOptions = Array.isArray(session?.configOptions) ? session.configOptions : [];
+    const geminiAvailable = Array.isArray(session?.models?.availableModels);
+
+    if (type === "session_config") {
+        if (standardOptions.length > 0) return applyStandardModelSelection(conn, config, session, requestedModel, selection, standardOptions);
+        if (selection.required) throw new AcpError(`agent ${config.instanceId ?? config.name} did not expose configOptions (model_selection.type=session_config)`);
+        return Promise.resolve();
+    }
+    if (type === "gemini") {
+        if (geminiAvailable) return applyGeminiModelSelection(conn, config, session, requestedModel, selection);
+        if (selection.required) throw new AcpError(`agent ${config.instanceId ?? config.name} did not expose models.availableModels (model_selection.type=gemini)`);
+        return Promise.resolve();
+    }
+    // auto: try standard first, fall back to Gemini
+    if (standardOptions.length > 0) return applyStandardModelSelection(conn, config, session, requestedModel, selection, standardOptions);
+    if (geminiAvailable) return applyGeminiModelSelection(conn, config, session, requestedModel, selection);
+    if (selection.required) {
+        throw new AcpError(
+            `agent ${config.instanceId ?? config.name} did not expose a session-config model option or a Gemini models extension`,
+        );
+    }
+    return Promise.resolve();
+}
+
+function applyStandardModelSelection(conn, config, session, requestedModel, selection, configOptions) {
     const option = findConfigOption(configOptions, selection.configId);
     const configId = selection.configId || option?.id;
     let value = selection.values?.[requestedModel];
@@ -680,6 +711,35 @@ function applyRequestedModel(conn, config, session, requestedModel) {
         return Promise.resolve();
     }
     return conn.setSessionConfigOption(session.sessionId, configId, value);
+}
+
+function applyGeminiModelSelection(conn, config, session, requestedModel, selection) {
+    const available = Array.isArray(session?.models?.availableModels)
+        ? session.models.availableModels
+        : [];
+    let modelId = selection.values?.[requestedModel];
+    if (modelId === undefined) {
+        const direct = available.find(
+            (m) => m && (m.modelId === requestedModel || m.name === requestedModel),
+        );
+        if (direct) modelId = direct.modelId;
+    }
+    if (modelId === undefined || modelId === null || modelId === "") {
+        if (selection.required)
+            throw new AcpError(
+                `agent ${config.instanceId ?? config.name} cannot map requested model ${JSON.stringify(requestedModel)} to a Gemini availableModels entry`,
+            );
+        return Promise.resolve();
+    }
+    const allowed = available.length === 0 || available.some((m) => m?.modelId === modelId);
+    if (!allowed) {
+        if (selection.required)
+            throw new AcpError(
+                `agent ${config.instanceId ?? config.name} availableModels does not include modelId ${JSON.stringify(modelId)} for requested model ${JSON.stringify(requestedModel)}`,
+            );
+        return Promise.resolve();
+    }
+    return conn.setSessionModel(session.sessionId, modelId);
 }
 function findConfigOption(options, preferredId) {
     if (!Array.isArray(options)) return null;

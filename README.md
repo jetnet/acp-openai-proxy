@@ -203,10 +203,12 @@ Some ACP agents expose session configuration options, including a model selector
 
 ### How it works
 
-1. When the proxy creates a new ACP session (`session/new`), the agent may return `configOptions` in the response — a list of configuration knobs the agent supports.
-2. If `model_selection` is configured on the agent, the proxy looks for a config option matching `config_id` (or falls back to one with `category: "model"` or `id: "model"`).
-3. The proxy maps the OpenAI model string from the request (e.g. `"gemini-pro"`) to an ACP config value using the `values` map (e.g. `"pro"`).
-4. The proxy calls `session/set_config_option` with the resolved value before sending the prompt.
+1. When the proxy creates a new ACP session (`session/new`), the agent may return one of two shapes:
+   - **Standard ACP** — a `configOptions` array of configuration knobs.
+   - **Gemini CLI extension** — a `models` object with `availableModels: [{ modelId, name }]` and `currentModelId`.
+2. If `model_selection` is configured on the agent, the proxy looks for a config option matching `config_id` (or falls back to one with `category: "model"` or `id: "model"`). When the agent only exposes the Gemini extension, the proxy uses that automatically.
+3. The proxy maps the OpenAI model string from the request (e.g. `"gemini-pro"`) to either an ACP config value (standard) or a Gemini `modelId` (extension) using the `values` map.
+4. The proxy calls `session/set_config_option` (standard) or `session/set_model` (Gemini extension) with the resolved value before sending the prompt.
 
 ### Example
 
@@ -247,9 +249,32 @@ You can also set `model_selection: true` as shorthand for `{ "type": "session_co
 
 ### How to know if an ACP agent supports model selection
 
-There is no way to know in advance from configuration alone. The proxy discovers support **at runtime** when the agent responds to `session/new`. If the agent returns a `configOptions` entry with a model category, it supports it. If it returns no config options, it does not.
+There is no way to know in advance from configuration alone. The proxy discovers support **at runtime** when the agent responds to `session/new`. The agent supports model selection if its response contains either a `configOptions` entry with a model category (standard ACP) or a `models.availableModels` array (Gemini CLI extension). If it returns neither, it does not.
 
-To check: start the proxy with `ACP_OPENAI_PROXY_LOG_LEVEL=debug` and inspect the `session/new` response logged for each agent. Look for a config option with `category: "model"`.
+To check: start the proxy with `ACP_OPENAI_PROXY_LOG_LEVEL=debug` and inspect the `session/new` response logged for each agent.
+
+### Gemini CLI example
+
+The Google Gemini CLI uses the `models` extension shape rather than `configOptions`. Configure it like:
+
+```json
+{
+  "name": "gemini",
+  "command": "npx",
+  "args": ["-y", "@google/gemini-cli@latest", "--acp"],
+  "models": ["flash-lite", "flash", "pro"],
+  "model_selection": {
+    "required": true,
+    "values": {
+      "flash-lite": "gemini-2.5-flash-lite",
+      "flash":      "gemini-2.5-flash",
+      "pro":        "gemini-2.5-pro"
+    }
+  }
+}
+```
+
+The proxy will issue `session/set_model` with the mapped `modelId` before each prompt. Run the [model probe](scripts/) trick (`session/new` with no follow-up) to discover the actual `modelId` strings the CLI advertises.
 
 ### Error behavior when model selection fails
 
@@ -400,4 +425,4 @@ npm run check
 npm test
 ```
 
-Current expected test result: 41 passing tests.
+Current expected test result: 43 passing tests.

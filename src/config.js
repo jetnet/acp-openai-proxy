@@ -173,10 +173,12 @@ function agentModels(item, name) {
 function normalizeModelSelection(item, name) {
   const raw = item.model_selection ?? item.modelSelection;
   if (raw === undefined || raw === null || raw === false) return null;
-  if (raw === true) return { type: 'session_config', configId: null, values: {}, required: true };
+  if (raw === true) return { type: 'auto', configId: null, values: {}, required: true };
   if (!isObj(raw)) throw new Error(`agent ${name}.model_selection must be an object or boolean`);
-  const type = String(raw.type ?? raw.mode ?? 'session_config').toLowerCase().trim().replace(/-/g, '_');
-  if (type !== 'session_config') throw new Error(`agent ${name}.model_selection.type must be session_config`);
+  const type = String(raw.type ?? raw.mode ?? 'auto').toLowerCase().trim().replace(/-/g, '_');
+  if (!['session_config', 'gemini', 'auto'].includes(type)) {
+    throw new Error(`agent ${name}.model_selection.type must be one of: session_config, gemini, auto`);
+  }
   const hasConfigId = raw.config_id !== undefined || raw.configId !== undefined || raw.id !== undefined || raw.option_id !== undefined || raw.optionId !== undefined;
   const configIdRaw = raw.config_id ?? raw.configId ?? raw.id ?? raw.option_id ?? raw.optionId;
   const configId = !hasConfigId || configIdRaw === null ? null : String(configIdRaw);

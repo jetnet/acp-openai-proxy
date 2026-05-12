@@ -42,7 +42,13 @@ const apiKey = config.server?.api_key || config.server?.apiKey;
 const host = config.server?.host || "127.0.0.1";
 const port = config.server?.port || 11435;
 const bootTimeoutSec = Number(process.env.ACP_SMOKE_BOOT_TIMEOUT_S || 120);
-const smokeModel = process.env.ACP_SMOKE_MODEL || "flash-lite";
+// Preference order for picking a smoke model when ACP_SMOKE_MODEL is not set.
+// Earlier entries are cheaper / less-rate-limited in typical setups.
+const SMOKE_MODEL_PREFERENCE = [
+  "gemini-flash-lite", "flash-lite", "gemini-flash", "flash",
+  "claude-haiku", "haiku", "big-pickle", "gpt-5-mini",
+];
+const smokeModelOverride = process.env.ACP_SMOKE_MODEL || "";
 
 const baseUrl = process.env.ACP_SMOKE_BASE_URL || `http://${host}:${port}`;
 const auth = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
@@ -100,12 +106,12 @@ async function shutdownProxy() {
   if (!proxy) return;
   proxy.kill("SIGTERM");
   const deadline = Date.now() + 10_000;
-  while (proxy.exitCode === null && Date.now() < deadline) await sleep(50);
-  if (proxy.exitCode === null) proxy.kill("SIGKILL");
+  while (proxy.exitCode === null && proxy.signalCode === null && Date.now() < deadline) await sleep(50);
+  if (proxy.exitCode === null && proxy.signalCode === null) proxy.kill("SIGKILL");
 }
 
 async function main() {
-  console.log(`live-smoke: config=${configPath} base=${baseUrl} model=${smokeModel}`);
+  console.log(`live-smoke: config=${configPath} base=${baseUrl} model_override=${smokeModelOverride || "(auto)"}`);
   proxy = await spawnProxy();
 
   console.log("=== boot ===");
@@ -121,11 +127,17 @@ async function main() {
   check("GET /v1/models returns a list", Array.isArray(models?.data) && models.data.length > 0,
     `${models?.data?.length ?? 0} models`);
 
-  const smoke = models.data.find((m) => m.id === smokeModel);
-  if (!smoke) {
-    check(`smoke model '${smokeModel}' present`, false, "skipping generation checks");
+  const availableIds = new Set(models.data.map((m) => m.id));
+  const picked = smokeModelOverride
+    ? (availableIds.has(smokeModelOverride) ? smokeModelOverride : null)
+    : SMOKE_MODEL_PREFERENCE.find((id) => availableIds.has(id));
+  if (!picked) {
+    check("a known smoke model is present in /v1/models", false,
+      `available=${[...availableIds].join(", ")} preference=${SMOKE_MODEL_PREFERENCE.join(", ")}`);
     return;
   }
+  const smoke = models.data.find((m) => m.id === picked);
+  const smokeModel = picked;
   check(`smoke model '${smokeModel}' present`, true,
     `pool=${smoke.x_acp_pool_size}, strategy=${smoke.x_acp_routing_strategy}`);
 

@@ -12,6 +12,7 @@ const SLOW_STREAM_MS = Number(process.env.ACP_FAKE_SLOW_STREAM_MS || 0);
 const PROMPT_DELAY_MS = Number(process.env.ACP_FAKE_PROMPT_DELAY_MS || 0);
 const CANCEL_LOG = process.env.ACP_FAKE_CANCEL_LOG || '';
 const STOP_REASON = String(process.env.ACP_FAKE_STOP_REASON || 'end_turn');
+const GEMINI_MODELS = String(process.env.ACP_FAKE_GEMINI_MODELS || '').split(',').map((x) => x.trim()).filter(Boolean);
 let sessionCounter = 0;
 const sessions = new Map();
 const cancellers = new Map();
@@ -63,11 +64,24 @@ rl.on('line', async (line) => {
   } else if (msg.method === 'session/new') {
     sessionCounter += 1;
     const sessionId = `session-${sessionCounter}`;
-    sessions.set(sessionId, { model: MODEL_OPTIONS[0] || '' });
+    sessions.set(sessionId, { model: MODEL_OPTIONS[0] || GEMINI_MODELS[0] || '' });
     const response = { sessionId };
     const options = configOptions();
     if (options) response.configOptions = options;
+    if (GEMINI_MODELS.length) {
+      response.models = {
+        availableModels: GEMINI_MODELS.map((id) => ({ modelId: id, name: id })),
+        currentModelId: GEMINI_MODELS[0]
+      };
+    }
     result(msg, response);
+  } else if (msg.method === 'session/set_model') {
+    const sessionId = msg.params?.sessionId;
+    const modelId = String(msg.params?.modelId ?? '');
+    if (!sessions.has(sessionId)) return error(msg, 'unknown session', -32001);
+    if (GEMINI_MODELS.length && !GEMINI_MODELS.includes(modelId)) return error(msg, `unsupported modelId ${modelId}`, -32602);
+    sessions.get(sessionId).model = modelId;
+    result(msg, {});
   } else if (msg.method === 'session/set_config_option') {
     const sessionId = msg.params?.sessionId;
     const value = String(msg.params?.value ?? '');
