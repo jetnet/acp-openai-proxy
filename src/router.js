@@ -113,7 +113,7 @@ export function formatRouteFailures(model, failures) {
   return `all ACP runtimes failed for model ${JSON.stringify(model)} after ${failures.length} attempt(s): ${detail}`;
 }
 
-export function sleepSeconds(seconds) {
+function sleepSeconds(seconds) {
   const ms = Math.max(0, Number(seconds || 0) * 1000);
   if (!ms) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -168,18 +168,6 @@ function contentForAffinity(value) {
   }
   if (value && typeof value === 'object') return typeof value.text === 'string' ? value.text : contentForAffinity(value.content);
   return '';
-}
-
-function routeKeyFromPromptBlocks(blocks, maxChars) {
-  const text = (Array.isArray(blocks) ? blocks : []).map((block) => {
-    if (!block || typeof block !== 'object') return '';
-    if (block.type === 'text') return String(block.text ?? '');
-    if (block.type === 'resource_link') return String(block.uri ?? block.name ?? '');
-    if (block.type === 'image' || block.type === 'audio') return `[${block.type}:${block.mimeType ?? 'unknown'}]`;
-    if (block.type === 'resource') return String(block.resource?.uri ?? block.resource?.mimeType ?? '[resource]');
-    return '';
-  }).filter(Boolean).join('\n').slice(0, maxChars);
-  return text ? `prompt-prefix:${createHash('blake2b512').update(text).digest('hex').slice(0, 32)}` : undefined;
 }
 
 function rotate(values, start) {

@@ -52,7 +52,9 @@ export function defaultConfigText() {
 export function loadConfig(configPath) {
   const resolved = path.resolve(configPath);
   const text = fs.readFileSync(resolved, 'utf8');
-  const raw = resolved.endsWith('.json') || text.trimStart().startsWith('{') ? JSON.parse(text) : parseSimpleToml(text);
+  let raw;
+  try { raw = JSON.parse(text); }
+  catch (cause) { throw new Error(`failed to parse config ${resolved} as JSON: ${cause.message}`); }
   return normalizeConfig(raw, path.dirname(resolved));
 }
 
@@ -70,21 +72,25 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
   };
   const logging = normalizeLogging(l);
   const server = {
-    host: String(s.host ?? raw.host ?? '127.0.0.1'),
-    port: Number(s.port ?? raw.port ?? 11435),
-    apiKey: (s.api_key ?? s.apiKey ?? raw.api_key ?? raw.apiKey) ? String(s.api_key ?? s.apiKey ?? raw.api_key ?? raw.apiKey) : undefined,
-    requestTimeoutSeconds: Number(s.request_timeout_seconds ?? s.requestTimeoutSeconds ?? raw.request_timeout_seconds ?? raw.requestTimeoutSeconds ?? 3600),
+    host: nonEmptyString(s.host ?? raw.host ?? '127.0.0.1', 'server.host'),
+    port: intRange(s.port ?? raw.port ?? 11435, 'server.port', { min: 0, max: 65535 }),
+    apiKey: normalizeApiKey(s.api_key ?? s.apiKey ?? raw.api_key ?? raw.apiKey),
+    requestTimeoutSeconds: numRange(s.request_timeout_seconds ?? s.requestTimeoutSeconds ?? raw.request_timeout_seconds ?? raw.requestTimeoutSeconds ?? 3600, 'server.request_timeout_seconds', { min: 1, max: 86400 }),
     routingStrategy: normalizeRoutingStrategy(pick('strategy', ['routing_strategy', 'routingStrategy', 'routing_policy', 'routingPolicy'], 'sticky_failover')),
-    maxRetries: Math.max(1, Number(pick('max_retries', ['maxRetries', 'retries'], 1))),
-    maxAttemptsPerRequest: Math.max(0, Number(pick('max_attempts_per_request', ['maxAttemptsPerRequest', 'max_attempts', 'maxAttempts'], 0))),
-    failureCooldownSeconds: Math.max(0, Number(pick('unhealthy_cooldown_seconds', ['unhealthyCooldownSeconds', 'failure_cooldown_seconds', 'failureCooldownSeconds', 'cooldown_seconds', 'cooldownSeconds', 'cooldown'], 60))),
-    retryBackoffSeconds: Math.max(0, Number(pick('retry_backoff_seconds', ['retryBackoffSeconds', 'backoff_seconds', 'backoffSeconds'], 0))),
+    maxRetries: intRange(pick('max_retries', ['maxRetries', 'retries'], 1), 'server.max_retries', { min: 1, max: 100 }),
+    maxAttemptsPerRequest: intRange(pick('max_attempts_per_request', ['maxAttemptsPerRequest', 'max_attempts', 'maxAttempts'], 0), 'server.max_attempts_per_request', { min: 0, max: 1000 }),
+    failureCooldownSeconds: numRange(pick('unhealthy_cooldown_seconds', ['unhealthyCooldownSeconds', 'failure_cooldown_seconds', 'failureCooldownSeconds', 'cooldown_seconds', 'cooldownSeconds', 'cooldown'], 60), 'server.failure_cooldown_seconds', { min: 0, max: 86400 }),
+    retryBackoffSeconds: numRange(pick('retry_backoff_seconds', ['retryBackoffSeconds', 'backoff_seconds', 'backoffSeconds'], 0), 'server.retry_backoff_seconds', { min: 0, max: 3600 }),
     retryOnAnyAcpError: asBool(pick('retry_on_any_acp_error', ['retryOnAnyAcpError', 'retry_all_acp_errors', 'retryAllAcpErrors'], false)),
-    affinityPrefixChars: Math.max(128, Number(pick('affinity_prefix_chars', ['affinityPrefixChars', 'routing_key_prefix_chars', 'routingKeyPrefixChars', 'prompt_affinity_prefix_chars', 'promptAffinityPrefixChars'], 4096))),
-    maxRequestBytes: Math.max(1024, Number(s.max_request_bytes ?? s.maxRequestBytes ?? raw.max_request_bytes ?? 64 * 1024 * 1024))
+    affinityPrefixChars: intRange(pick('affinity_prefix_chars', ['affinityPrefixChars', 'routing_key_prefix_chars', 'routingKeyPrefixChars', 'prompt_affinity_prefix_chars', 'promptAffinityPrefixChars'], 4096), 'server.affinity_prefix_chars', { min: 128, max: 1048576 }),
+    maxRequestBytes: intRange(s.max_request_bytes ?? s.maxRequestBytes ?? raw.max_request_bytes ?? 64 * 1024 * 1024, 'server.max_request_bytes', { min: 1024, max: 1024 * 1024 * 1024 })
   };
   if (!['sticky_failover', 'primary_failover', 'round_robin', 'least_busy'].includes(server.routingStrategy)) {
     throw new Error('routing_strategy must be sticky_failover, primary_failover, round_robin, or least_busy');
+  }
+  server.allowUnauthenticated = asBool(s.allow_unauthenticated ?? s.allowUnauthenticated ?? raw.allow_unauthenticated, false);
+  if (!server.apiKey && !isLoopbackHost(server.host) && !server.allowUnauthenticated) {
+    throw new Error(`server.api_key is required when server.host is ${JSON.stringify(server.host)}; set server.allow_unauthenticated: true to bind a non-loopback host without auth`);
   }
   const items = agentItems(raw);
   const names = items.map((item, index) => agentName(item, index));
@@ -113,8 +119,8 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
       permission: normalizePermission(item.permission ?? item.auto_permission ?? 'deny'),
       exposeToolUpdates: asBool(item.expose_tool_updates ?? item.exposeToolUpdates ?? item.show_tool_updates ?? item.showToolUpdates, false),
       startAtBoot: asBool(item.start_at_boot ?? item.startAtBoot ?? item.start_on_boot ?? item.startOnBoot, false),
-      startupTimeoutSeconds: Number(item.startup_timeout_seconds ?? item.startupTimeoutSeconds ?? item.startup_timeout ?? item.startupTimeout ?? 30),
-      requestTimeoutSeconds: Number(item.request_timeout_seconds ?? item.requestTimeoutSeconds ?? server.requestTimeoutSeconds)
+      startupTimeoutSeconds: numRange(item.startup_timeout_seconds ?? item.startupTimeoutSeconds ?? item.startup_timeout ?? item.startupTimeout ?? 30, `agent ${name}.startup_timeout_seconds`, { min: 1, max: 3600 }),
+      requestTimeoutSeconds: numRange(item.request_timeout_seconds ?? item.requestTimeoutSeconds ?? server.requestTimeoutSeconds, `agent ${name}.request_timeout_seconds`, { min: 1, max: 86400 })
     };
     if (!agent.command) throw new Error(`agent ${name} command must not be empty`);
     return agent;
@@ -209,64 +215,41 @@ function asBool(v, fallback = false) {
 }
 function isObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
 
-export function parseSimpleToml(text) {
-  const root = {};
-  let cur = root;
-  let currentAgent = null;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = stripComment(raw).trim();
-    if (!line) continue;
-    const array = /^\[\[\s*([^\]]+)\s*\]\]$/.exec(line);
-    if (array) {
-      if (array[1].trim() !== 'agents') throw new Error(`unsupported TOML array ${array[1]}`);
-      root.agents ||= [];
-      currentAgent = {};
-      root.agents.push(currentAgent);
-      cur = currentAgent;
-      continue;
-    }
-    const table = /^\[\s*([^\]]+)\s*\]$/.exec(line);
-    if (table) {
-      const name = table[1].trim();
-      if (name.startsWith('agents.')) {
-        if (!currentAgent) throw new Error(`[${name}] must follow [[agents]]`);
-        cur = currentAgent;
-        for (const part of name.slice('agents.'.length).split('.')) cur = cur[part] ||= {};
-      } else {
-        currentAgent = null;
-        cur = root;
-        for (const part of name.split('.')) cur = cur[part] ||= {};
-      }
-      continue;
-    }
-    const eq = topEq(line);
-    if (eq < 0) throw new Error(`invalid TOML line: ${raw}`);
-    cur[line.slice(0, eq).trim()] = parseValue(line.slice(eq + 1).trim());
+function intRange(value, field, { min, max, fallback } = {}) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new Error(`${field} must be an integer in [${min}, ${max}]; got ${JSON.stringify(value)}`);
   }
-  return root;
+  return n;
 }
-function stripComment(line) {
-  let quote = null, esc = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (esc) { esc = false; continue; }
-    if (quote === '"' && ch === '\\') { esc = true; continue; }
-    if (!quote && (ch === '"' || ch === "'")) quote = ch;
-    else if (quote === ch) quote = null;
-    else if (!quote && ch === '#') return line.slice(0, i);
+
+function numRange(value, field, { min, max, fallback } = {}) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < min || n > max) {
+    throw new Error(`${field} must be a finite number in [${min}, ${max}]; got ${JSON.stringify(value)}`);
   }
-  return line;
+  return n;
 }
-function topEq(s) { let q = null, d = 0; for (let i = 0; i < s.length; i++) { const ch = s[i]; if ((ch === '"' || ch === "'") && s[i - 1] !== '\\') q = q === ch ? null : (q || ch); else if (!q && (ch === '[' || ch === '{')) d++; else if (!q && (ch === ']' || ch === '}')) d--; else if (!q && d === 0 && ch === '=') return i; } return -1; }
-function parseValue(s) {
-  if (s.startsWith('"') && s.endsWith('"')) return JSON.parse(s);
-  if (s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1);
-  if (s === 'true') return true;
-  if (s === 'false') return false;
-  if (/^[+-]?\d+(\.\d+)?$/.test(s)) return Number(s);
-  if (s.startsWith('[') && s.endsWith(']')) return splitTop(s.slice(1, -1)).map(parseValue);
-  if (s.startsWith('{') && s.endsWith('}')) { const o = {}; for (const p of splitTop(s.slice(1, -1))) { const eq = topEq(p); o[p.slice(0, eq).trim()] = parseValue(p.slice(eq + 1).trim()); } return o; }
-  return s;
+
+function nonEmptyString(value, field) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${field} must be a non-empty string; got ${JSON.stringify(value)}`);
+  }
+  return value;
 }
-function splitTop(s) { const parts = []; let q = null, d = 0, start = 0, esc = false; for (let i = 0; i < s.length; i++) { const ch = s[i]; if (esc) { esc = false; continue; } if (q === '"' && ch === '\\') { esc = true; continue; } if (!q && (ch === '"' || ch === "'")) q = ch; else if (q === ch) q = null; else if (!q && (ch === '[' || ch === '{')) d++; else if (!q && (ch === ']' || ch === '}')) d--; else if (!q && d === 0 && ch === ',') { parts.push(s.slice(start, i).trim()); start = i + 1; } } const tail = s.slice(start).trim(); if (tail) parts.push(tail); return parts; }
+
+function isLoopbackHost(host) {
+  const h = String(host || '').toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]' || h.startsWith('127.');
+}
+
+function normalizeApiKey(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new Error('server.api_key must be a string');
+  if (value === '') throw new Error('server.api_key is set but empty; remove the field to disable auth or set a real value');
+  return value;
+}
+
 

@@ -54,7 +54,7 @@ You can also configure logging in `config.json`:
 
 Environment variables override the config values when set.
 
-Configuration may also be written in a **minimal TOML subset** (see `examples/config.toml`). Multi-line strings, numeric underscores, and TOML datetimes are not supported.
+Configuration is JSON only. See `examples/config.json` for a complete example.
 
 Example request:
 
@@ -400,4 +400,4 @@ npm run check
 npm test
 ```
 
-Current expected test result: 19 passing tests.
+Current expected test result: 23 passing tests.

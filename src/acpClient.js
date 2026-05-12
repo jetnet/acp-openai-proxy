@@ -2,7 +2,20 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-const PKG_VERSION = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')).version;
+
+let PKG_VERSION = process.env.ACP_PROXY_VERSION || "";
+if (!PKG_VERSION) {
+    try {
+        PKG_VERSION = JSON.parse(
+            readFileSync(
+                join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"),
+                "utf8",
+            ),
+        ).version;
+    } catch {
+        PKG_VERSION = "0.0.0";
+    }
+}
 
 export class AcpError extends Error {
     constructor(message, options) {

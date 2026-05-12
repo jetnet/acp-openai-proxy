@@ -366,6 +366,55 @@ test('conversation_id body field provides sticky routing affinity', async () => 
   });
 });
 
+test('config rejects non-numeric max_request_bytes (closes NaN bypass)', () => {
+  assert.throws(
+    () => config({ server: { ...baseServer, max_request_bytes: 'oops' }, agents: [agent('gemini', 'a')] }),
+    /max_request_bytes/
+  );
+  assert.throws(
+    () => config({ server: { ...baseServer, port: 'not-a-number' }, agents: [agent('gemini', 'a')] }),
+    /server\.port/
+  );
+  assert.throws(
+    () => config({ server: { ...baseServer, requestTimeoutSeconds: 'soon' }, agents: [agent('gemini', 'a')] }),
+    /request_timeout_seconds/
+  );
+});
+
+test('config rejects empty api_key explicitly', () => {
+  assert.throws(
+    () => config({ server: { ...baseServer, apiKey: '' }, agents: [agent('gemini', 'a')] }),
+    /api_key is set but empty/
+  );
+});
+
+test('config rejects non-loopback host without api_key unless allow_unauthenticated', () => {
+  assert.throws(
+    () => config({ server: { host: '0.0.0.0', port: 0 }, agents: [agent('gemini', 'a')] }),
+    /api_key is required when server\.host/
+  );
+  // Explicit opt-in succeeds
+  const cfg = config({
+    server: { host: '0.0.0.0', port: 0, allow_unauthenticated: true },
+    agents: [agent('gemini', 'a')]
+  });
+  assert.equal(cfg.server.host, '0.0.0.0');
+});
+
+test('bearer auth accepts lowercase scheme and rejects mismatched length', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const ok = await fetch(`${baseUrl}/v1/models`, { headers: { authorization: 'bearer secret' } });
+    assert.equal(ok.status, 200);
+    const wrong = await fetch(`${baseUrl}/v1/models`, { headers: { authorization: 'Bearer secre' } });
+    assert.equal(wrong.status, 401);
+    const wrong2 = await fetch(`${baseUrl}/v1/models`, { headers: { authorization: 'Bearer wrongkey' } });
+    assert.equal(wrong2.status, 401);
+  });
+});
+
 test('/v1/responses non-streaming with multimodal data URI image', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover' },

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { AcpError } from './acpClient.js';
 import { createLogger } from './logger.js';
 import {
@@ -116,8 +117,14 @@ async function handleRequest(manager, req, res) {
 
 function authorized(config, req) {
   const key = config.server.apiKey;
-  if (!key) return true;
-  return req.headers.authorization === `Bearer ${key}`;
+  if (key === undefined) return true;
+  const header = String(req.headers.authorization ?? '');
+  const match = /^bearer\s+(.+)$/i.exec(header);
+  if (!match) return false;
+  const provided = Buffer.from(match[1]);
+  const expected = Buffer.from(key);
+  if (provided.length !== expected.length) return false;
+  return timingSafeEqual(provided, expected);
 }
 
 function handleHealth(manager, res) {

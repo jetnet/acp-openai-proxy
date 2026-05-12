@@ -71,7 +71,7 @@ graph TD
     end
 
     subgraph Core
-        CONFIG["config.js<br/><i>JSON/TOML loading,<br/>env expansion,<br/>normalization</i>"]
+        CONFIG["config.js<br/><i>JSON loading,<br/>env expansion,<br/>normalization</i>"]
         LOGGER["logger.js<br/><i>Structured logging<br/>(JSON or text)</i>"]
         SERVER["server.js<br/><i>HTTP server,<br/>endpoint handlers,<br/>SSE streaming</i>"]
     end
@@ -108,7 +108,7 @@ graph TD
 | Module | Purpose |
 |--------|---------|
 | `index.js` | CLI arg parsing, config loading, server bootstrap, graceful shutdown |
-| `config.js` | JSON/TOML config parsing, `{var:NAME}` / `${NAME}` env expansion, schema normalization |
+| `config.js` | JSON config parsing, `{var:NAME}` / `${NAME}` env expansion, schema normalization |
 | `logger.js` | Severity-filtered structured logging (stdout for debug/info, stderr for warn/error) |
 | `server.js` | HTTP request routing, auth, endpoint handlers, SSE streaming, failover orchestration |
 | `openaiCompat.js` | Prompt builders (chat/completion/responses → ACP blocks), response builders, tool-call extraction, routing key derivation |
@@ -457,7 +457,7 @@ ACP usage fields are mapped to OpenAI format (`prompt_tokens`, `completion_token
 }
 ```
 
-Supports JSON (recommended) and a minimal TOML subset. The old `env_sections` indirection is rejected.
+JSON only. The old `env_sections` indirection is rejected.
 
 ### 8.2  Routing configuration
 
@@ -658,7 +658,7 @@ Persistent session database, remote file downloader, provider plugin registry, p
 
 ```bash
 npm run check   # Syntax check all source files
-npm test         # Run integration tests (19 passing)
+npm test         # Run integration tests (23 passing)
 ```
 
 Tests cover: logger stdout/stderr routing, logger text format, config logging normalization, env expansion and rejected env_sections, model_selection mapping, round-robin pool with duplicate model ids, primary-failover retry on quota-like failures, all-runtimes-failed 502, sticky_failover affinity, multimodal data URI, OpenAI client-tool envelope, streaming tool-call deltas, streaming SSE chunks + DONE + usage, streaming usage on a separate choices:[] chunk, image capability gating, model_selection required:false fallback, max_request_bytes 413, conversation_id routing affinity, /v1/responses non-streaming multimodal.

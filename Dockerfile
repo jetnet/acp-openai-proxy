@@ -2,8 +2,10 @@ FROM node:22-slim
 WORKDIR /app
 
 ARG ACP_GLOBAL_PACKAGES="@google/gemini-cli@latest @agentclientprotocol/claude-agent-acp@latest @github/copilot@latest"
+ARG ACP_PROXY_VERSION=unknown
 ENV NPM_CONFIG_FUND=false \
-    NPM_CONFIG_UPDATE_NOTIFIER=false
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    ACP_PROXY_VERSION=${ACP_PROXY_VERSION}
 
 RUN set -eux; \
     npm install -g --no-fund --no-update-notifier ${ACP_GLOBAL_PACKAGES}; \
