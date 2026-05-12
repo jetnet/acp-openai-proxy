@@ -135,31 +135,39 @@ test('agent env supports {var:NAME} expansion and rejects removed env_sections',
   }
 });
 
-test('model_selection works with the Gemini CLI extension (models.availableModels + session/set_model)', async () => {
-  await withApp({
-    server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
+test('access log carries request_model and response_model', async () => {
+  const captured = [];
+  const recordingLogger = {
+    debug: () => {},
+    info: (msg, fields) => captured.push({ level: 'info', msg, fields }),
+    warn: (msg, fields) => captured.push({ level: 'warn', msg, fields }),
+    error: (msg, fields) => captured.push({ level: 'error', msg, fields })
+  };
+  const app = new AcpOpenAiServer(config({
+    server: { ...baseServer },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite' }),
-      models: ['flash-lite', 'flash', 'pro'],
-      model_selection: {
-        required: true,
-        values: {
-          'pro': 'gemini-2.5-pro',
-          'flash': 'gemini-2.5-flash',
-          'flash-lite': 'gemini-2.5-flash-lite'
-        }
-      }
+      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-flash-lite,gemini-2.5-pro' }),
+      models: ['gemini-flash-lite'],
+      model_selection: { values: { 'gemini-flash-lite': 'gemini-2.5-flash-lite' }, required: true }
     }]
-  }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'pro', messages: [{ role: 'user', content: 'hi' }] });
+  }), { logger: recordingLogger });
+  await app.startAtBoot();
+  const address = await app.listen();
+  try {
+    const r = await fetch(`http://${address.address}:${address.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+      body: JSON.stringify({ model: 'gemini-flash-lite', messages: [{ role: 'user', content: 'hi' }] })
+    });
     assert.equal(r.status, 200);
-    const body = await r.json();
-    assert.match(body.choices[0].message.content, /Echo\[a\/gemini-2\.5-pro\]/);
-
-    const flashLite = await post(baseUrl, { model: 'flash-lite', messages: [{ role: 'user', content: 'hi' }] });
-    assert.equal(flashLite.status, 200);
-    assert.match((await flashLite.json()).choices[0].message.content, /Echo\[a\/gemini-2\.5-flash-lite\]/);
-  });
+  } finally {
+    await app.close();
+  }
+  const httpLog = captured.find((c) => c.msg === 'http request' && c.fields?.path === '/v1/chat/completions');
+  assert.ok(httpLog, 'expected an http request log line');
+  assert.equal(httpLog.fields.request_model, 'gemini-flash-lite');
+  assert.equal(httpLog.fields.response_model, 'gemini-2.5-flash-lite');
+  assert.match(httpLog.fields.request_id, /^req_[0-9a-f]+$/);
 });
 
 test('model_selection (gemini) rejects unmapped model when required', async () => {
@@ -775,6 +783,34 @@ test('client abort during streaming propagates session/cancel to the agent', asy
   } finally {
     await app.close();
   }
+});
+
+test('Gemini extension maps OpenAI ids via session/set_model', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
+    agents: [{
+      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite' }),
+      models: ['flash-lite', 'flash', 'pro'],
+      model_selection: {
+        required: true,
+        values: {
+          'pro': 'gemini-2.5-pro',
+          'flash': 'gemini-2.5-flash',
+          'flash-lite': 'gemini-2.5-flash-lite'
+        }
+      }
+    }]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'pro', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('x-acp-model'), 'pro');
+    assert.equal(r.headers.get('x-acp-upstream-model'), 'gemini-2.5-pro');
+    const body = await r.json();
+    assert.match(body.choices[0].message.content, /Echo\[a\/gemini-2\.5-pro\]/);
+    const flashLite = await post(baseUrl, { model: 'flash-lite', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(flashLite.status, 200);
+    assert.equal(flashLite.headers.get('x-acp-upstream-model'), 'gemini-2.5-flash-lite');
+  });
 });
 
 test('/v1/responses non-streaming with multimodal data URI image', async () => {

@@ -580,12 +580,15 @@ export class AgentRuntime {
             const session = await conn.newSessionInfo();
             sessionId = session.sessionId;
             queue = conn.registerSession(sessionId);
-            await applyRequestedModel(
+            const appliedModelId = await applyRequestedModel(
                 conn,
                 this.config,
                 session,
                 options.model,
             );
+            const upstreamModelId =
+                appliedModelId ?? session?.models?.currentModelId ?? null;
+            yield { kind: "session_ready", sessionId, upstreamModelId };
             const promptPromise = conn
                 .request(
                     "session/prompt",
@@ -657,7 +660,7 @@ export class AgentRuntime {
 
 function applyRequestedModel(conn, config, session, requestedModel) {
     const selection = config.modelSelection;
-    if (!selection || !requestedModel) return Promise.resolve();
+    if (!selection || !requestedModel) return Promise.resolve(null);
     const type = selection.type || "auto";
     const standardOptions = Array.isArray(session?.configOptions) ? session.configOptions : [];
     const geminiAvailable = Array.isArray(session?.models?.availableModels);
@@ -665,12 +668,12 @@ function applyRequestedModel(conn, config, session, requestedModel) {
     if (type === "session_config") {
         if (standardOptions.length > 0) return applyStandardModelSelection(conn, config, session, requestedModel, selection, standardOptions);
         if (selection.required) throw new AcpError(`agent ${config.instanceId ?? config.name} did not expose configOptions (model_selection.type=session_config)`);
-        return Promise.resolve();
+        return Promise.resolve(null);
     }
     if (type === "gemini") {
         if (geminiAvailable) return applyGeminiModelSelection(conn, config, session, requestedModel, selection);
         if (selection.required) throw new AcpError(`agent ${config.instanceId ?? config.name} did not expose models.availableModels (model_selection.type=gemini)`);
-        return Promise.resolve();
+        return Promise.resolve(null);
     }
     // auto: try standard first, fall back to Gemini
     if (standardOptions.length > 0) return applyStandardModelSelection(conn, config, session, requestedModel, selection, standardOptions);
@@ -680,10 +683,10 @@ function applyRequestedModel(conn, config, session, requestedModel) {
             `agent ${config.instanceId ?? config.name} did not expose a session-config model option or a Gemini models extension`,
         );
     }
-    return Promise.resolve();
+    return Promise.resolve(null);
 }
 
-function applyStandardModelSelection(conn, config, session, requestedModel, selection, configOptions) {
+async function applyStandardModelSelection(conn, config, session, requestedModel, selection, configOptions) {
     const option = findConfigOption(configOptions, selection.configId);
     const configId = selection.configId || option?.id;
     let value = selection.values?.[requestedModel];
@@ -694,26 +697,27 @@ function applyStandardModelSelection(conn, config, session, requestedModel, sele
             throw new AcpError(
                 `agent ${config.instanceId ?? config.name} cannot map requested model ${JSON.stringify(requestedModel)} to an ACP model config option`,
             );
-        return Promise.resolve();
+        return null;
     }
     if (!configId) {
         if (selection.required)
             throw new AcpError(
                 `agent ${config.instanceId ?? config.name} did not expose an ACP model config option`,
             );
-        return Promise.resolve();
+        return null;
     }
     if (option && !optionAllowsValue(option, value)) {
         if (selection.required)
             throw new AcpError(
                 `agent ${config.instanceId ?? config.name} ACP model config ${JSON.stringify(configId)} does not list value ${JSON.stringify(value)} for requested model ${JSON.stringify(requestedModel)}`,
             );
-        return Promise.resolve();
+        return null;
     }
-    return conn.setSessionConfigOption(session.sessionId, configId, value);
+    await conn.setSessionConfigOption(session.sessionId, configId, value);
+    return value;
 }
 
-function applyGeminiModelSelection(conn, config, session, requestedModel, selection) {
+async function applyGeminiModelSelection(conn, config, session, requestedModel, selection) {
     const available = Array.isArray(session?.models?.availableModels)
         ? session.models.availableModels
         : [];
@@ -729,7 +733,7 @@ function applyGeminiModelSelection(conn, config, session, requestedModel, select
             throw new AcpError(
                 `agent ${config.instanceId ?? config.name} cannot map requested model ${JSON.stringify(requestedModel)} to a Gemini availableModels entry`,
             );
-        return Promise.resolve();
+        return null;
     }
     const allowed = available.length === 0 || available.some((m) => m?.modelId === modelId);
     if (!allowed) {
@@ -737,9 +741,10 @@ function applyGeminiModelSelection(conn, config, session, requestedModel, select
             throw new AcpError(
                 `agent ${config.instanceId ?? config.name} availableModels does not include modelId ${JSON.stringify(modelId)} for requested model ${JSON.stringify(requestedModel)}`,
             );
-        return Promise.resolve();
+        return null;
     }
-    return conn.setSessionModel(session.sessionId, modelId);
+    await conn.setSessionModel(session.sessionId, modelId);
+    return modelId;
 }
 function findConfigOption(options, preferredId) {
     if (!Array.isArray(options)) return null;

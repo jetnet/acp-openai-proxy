@@ -210,10 +210,17 @@ function validateRequest(body, kind) {
   else buildResponsesPrompt(body, PERMISSIVE_CAPS);
 }
 
+function responseHeadersFor(result, model) {
+  const headers = { 'x-acp-agent': result.runtime.runtimeId, 'x-acp-model': model };
+  if (result.upstreamModelId) headers['x-acp-upstream-model'] = result.upstreamModelId;
+  return headers;
+}
+
 async function handleChat(manager, req, res) {
   const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
   noteIgnoredOpenAiFields(body, manager.logger);
   const model = modelOrDefault(body, manager.defaultModel);
+  req.requestModel = model;
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'chat');
   validateRequest(body, 'chat');
@@ -221,20 +228,19 @@ async function handleChat(manager, req, res) {
     await runtime.ensureStarted();
     const promptBlocks = buildChatPrompt(body, runtime.connection.capabilities);
     validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
-    const collected = await collectRuntime(runtime, promptBlocks, model, signal);
+    const collected = await collectRuntime(runtime, promptBlocks, model, signal, req);
     return { runtime, promptBlocks, ...collected };
   });
+  req.responseModel = result.upstreamModelId ?? null;
   const toolCalls = extractClientToolCalls(result.text, body);
-  jsonResponse(res, 200, chatCompletionResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage, toolCalls), {
-    'x-acp-agent': result.runtime.runtimeId,
-    'x-acp-model': model
-  });
+  jsonResponse(res, 200, chatCompletionResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage, toolCalls), responseHeadersFor(result, model));
 }
 
 async function handleCompletion(manager, req, res) {
   const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
   noteIgnoredOpenAiFields(body, manager.logger);
   const model = modelOrDefault(body, manager.defaultModel);
+  req.requestModel = model;
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'completion');
   validateRequest(body, 'completion');
@@ -242,19 +248,18 @@ async function handleCompletion(manager, req, res) {
     await runtime.ensureStarted();
     const promptBlocks = buildCompletionPrompt(body);
     validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
-    const collected = await collectRuntime(runtime, promptBlocks, model, signal);
+    const collected = await collectRuntime(runtime, promptBlocks, model, signal, req);
     return { runtime, promptBlocks, ...collected };
   });
-  jsonResponse(res, 200, completionResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage), {
-    'x-acp-agent': result.runtime.runtimeId,
-    'x-acp-model': model
-  });
+  req.responseModel = result.upstreamModelId ?? null;
+  jsonResponse(res, 200, completionResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage), responseHeadersFor(result, model));
 }
 
 async function handleResponses(manager, req, res) {
   const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
   noteIgnoredOpenAiFields(body, manager.logger);
   const model = modelOrDefault(body, manager.defaultModel);
+  req.requestModel = model;
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'responses');
   validateRequest(body, 'responses');
@@ -262,13 +267,11 @@ async function handleResponses(manager, req, res) {
     await runtime.ensureStarted();
     const promptBlocks = buildResponsesPrompt(body, runtime.connection.capabilities);
     validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
-    const collected = await collectRuntime(runtime, promptBlocks, model, signal);
+    const collected = await collectRuntime(runtime, promptBlocks, model, signal, req);
     return { runtime, promptBlocks, ...collected };
   });
-  jsonResponse(res, 200, responsesApiResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage), {
-    'x-acp-agent': result.runtime.runtimeId,
-    'x-acp-model': model
-  });
+  req.responseModel = result.upstreamModelId ?? null;
+  jsonResponse(res, 200, responsesApiResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage), responseHeadersFor(result, model));
 }
 
 async function runWithFailover(manager, pool, req, res, body, operation) {
@@ -304,6 +307,7 @@ class ClientAbortError extends Error { constructor(message) { super(message); th
 
 async function streamEndpoint(manager, pool, req, res, body, model, kind) {
   validateRequest(body, kind);
+  req.requestModel = model;
   const attempts = pool.attemptOrder(routingKeyFromRequest(req, body, pool.affinityPrefixChars));
   const failures = [];
   const includeUsage = Boolean(body.stream_options?.include_usage || body.streamOptions?.includeUsage);
@@ -319,18 +323,24 @@ async function streamEndpoint(manager, pool, req, res, body, model, kind) {
       await runtime.ensureStarted();
       const promptBlocks = kind === 'chat' ? buildChatPrompt(body, runtime.connection.capabilities) : kind === 'completion' ? buildCompletionPrompt(body) : buildResponsesPrompt(body, runtime.connection.capabilities);
       validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
-      if (!headersSent) {
-        startSse(res, { 'x-acp-agent': runtime.runtimeId, 'x-acp-model': model });
-        headersSent = true;
-        if (kind === 'chat' && !bufferChatToolCalls) {
-          await writeSse(res, sseData({ id: responseId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] }));
-        }
-        if (kind === 'responses') await writeSse(res, sseData({ type: 'response.created', response: { id: responseId, object: 'response', created_at: created, status: 'in_progress', model } }));
-      }
       let text = '';
       let usage = null;
       for await (const event of runtime.streamPrompt(promptBlocks, abort.signal, { model })) {
         if (abort.signal.aborted || !sseWritable(res)) break;
+        if (event.kind === 'session_ready') {
+          req.responseModel = event.upstreamModelId ?? null;
+          if (!headersSent) {
+            const headers = { 'x-acp-agent': runtime.runtimeId, 'x-acp-model': model };
+            if (event.upstreamModelId) headers['x-acp-upstream-model'] = event.upstreamModelId;
+            startSse(res, headers);
+            headersSent = true;
+            if (kind === 'chat' && !bufferChatToolCalls) {
+              await writeSse(res, sseData({ id: responseId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] }));
+            }
+            if (kind === 'responses') await writeSse(res, sseData({ type: 'response.created', response: { id: responseId, object: 'response', created_at: created, status: 'in_progress', model } }));
+          }
+          continue;
+        }
         if (event.kind === 'chunk' || event.kind === 'tool') {
           emitted = true;
           text += event.text || '';
@@ -373,17 +383,21 @@ async function streamEndpoint(manager, pool, req, res, body, model, kind) {
   }
 }
 
-async function collectRuntime(runtime, promptBlocks, model, signal = undefined) {
+async function collectRuntime(runtime, promptBlocks, model, signal = undefined, req = null) {
   let text = '';
   let stopReason = 'end_turn';
   let usage = null;
+  let upstreamModelId = null;
   for await (const event of runtime.streamPrompt(promptBlocks, signal, { model })) {
     if (signal?.aborted) break;
-    if (event.kind === 'chunk' || event.kind === 'tool') text += event.text || '';
+    if (event.kind === 'session_ready') {
+      upstreamModelId = event.upstreamModelId;
+      if (req && event.upstreamModelId) req.responseModel = event.upstreamModelId;
+    } else if (event.kind === 'chunk' || event.kind === 'tool') text += event.text || '';
     else if (event.kind === 'usage') usage = event.usage;
     else if (event.kind === 'done') stopReason = event.stopReason || 'end_turn';
   }
-  return { text, stopReason, usage };
+  return { text, stopReason, usage, upstreamModelId };
 }
 
 async function writeStreamDelta(res, kind, id, model, created, deltaText) {
@@ -506,6 +520,8 @@ function logRequest(logger, req, res) {
       path: url.pathname,
       status: res.statusCode,
       duration_ms: Number(durationMs.toFixed(1)),
+      request_model: req.requestModel ?? undefined,
+      response_model: req.responseModel ?? undefined,
       content_length: res.getHeader('content-length') ?? undefined,
       user_agent: req.headers['user-agent']
     });

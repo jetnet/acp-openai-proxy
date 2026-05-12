@@ -151,6 +151,8 @@ Generation responses include:
 ```text
 X-ACP-Agent: gemini-a
 X-ACP-Model: gemini
+X-ACP-Upstream-Model: gemini-2.5-flash-lite     # only when model_selection fired
+X-Request-ID: req_a1b2c3d4e5f6
 ```
 
 ## What `models` means
@@ -444,4 +446,4 @@ npm run check
 npm test
 ```
 
-Current expected test result: 43 passing tests.
+Current expected test result: 44 passing tests.

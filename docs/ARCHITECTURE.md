@@ -332,6 +332,8 @@ flowchart TD
 |--------|-------|
 | `X-ACP-Agent` | Instance id of the selected ACP runtime |
 | `X-ACP-Model` | Requested OpenAI-compatible model id |
+| `X-ACP-Upstream-Model` | Upstream model the proxy set via `session/set_config_option` / `session/set_model` (only when model selection fired) |
+| `X-Request-ID` | Correlation id; included in every log line for the request |
 
 ### Authentication
 
@@ -658,7 +660,7 @@ Persistent session database, remote file downloader, provider plugin registry, p
 
 ```bash
 npm run check   # Syntax check all source files
-npm test         # Run integration tests (43 passing)
+npm test         # Run integration tests (44 passing)
 ```
 
 Tests cover: logger stdout/stderr routing, logger text format, config logging normalization, env expansion and rejected env_sections, model_selection mapping, round-robin pool with duplicate model ids, primary-failover retry on quota-like failures, all-runtimes-failed 502, sticky_failover affinity, multimodal data URI, OpenAI client-tool envelope, streaming tool-call deltas, streaming SSE chunks + DONE + usage, streaming usage on a separate choices:[] chunk, image capability gating, model_selection required:false fallback, max_request_bytes 413, conversation_id routing affinity, /v1/responses non-streaming multimodal.
