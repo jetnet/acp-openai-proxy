@@ -17,7 +17,8 @@ export function defaultConfigText() {
       failure_cooldown_seconds: 60,
       retry_backoff_seconds: 0,
       retry_on_any_acp_error: false,
-      affinity_prefix_chars: 4096
+      affinity_prefix_chars: 4096,
+      max_request_bytes: 67108864
     },
     agents: [
       {
@@ -79,7 +80,8 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
     failureCooldownSeconds: Math.max(0, Number(pick('unhealthy_cooldown_seconds', ['unhealthyCooldownSeconds', 'failure_cooldown_seconds', 'failureCooldownSeconds', 'cooldown_seconds', 'cooldownSeconds', 'cooldown'], 60))),
     retryBackoffSeconds: Math.max(0, Number(pick('retry_backoff_seconds', ['retryBackoffSeconds', 'backoff_seconds', 'backoffSeconds'], 0))),
     retryOnAnyAcpError: asBool(pick('retry_on_any_acp_error', ['retryOnAnyAcpError', 'retry_all_acp_errors', 'retryAllAcpErrors'], false)),
-    affinityPrefixChars: Math.max(128, Number(pick('affinity_prefix_chars', ['affinityPrefixChars', 'routing_key_prefix_chars', 'routingKeyPrefixChars', 'prompt_affinity_prefix_chars', 'promptAffinityPrefixChars'], 4096)))
+    affinityPrefixChars: Math.max(128, Number(pick('affinity_prefix_chars', ['affinityPrefixChars', 'routing_key_prefix_chars', 'routingKeyPrefixChars', 'prompt_affinity_prefix_chars', 'promptAffinityPrefixChars'], 4096))),
+    maxRequestBytes: Math.max(1024, Number(s.max_request_bytes ?? s.maxRequestBytes ?? raw.max_request_bytes ?? 64 * 1024 * 1024))
   };
   if (!['sticky_failover', 'primary_failover', 'round_robin', 'least_busy'].includes(server.routingStrategy)) {
     throw new Error('routing_strategy must be sticky_failover, primary_failover, round_robin, or least_busy');
@@ -207,11 +209,6 @@ function asBool(v, fallback = false) {
 }
 function isObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
 
-export function parseConfigText(text, filePath = 'config.json') {
-  const raw = filePath.endsWith('.json') || text.trimStart().startsWith('{') ? JSON.parse(text) : parseSimpleToml(text);
-  return normalizeConfig(raw, path.dirname(path.resolve(filePath)));
-}
-
 export function parseSimpleToml(text) {
   const root = {};
   let cur = root;
@@ -273,19 +270,3 @@ function parseValue(s) {
 }
 function splitTop(s) { const parts = []; let q = null, d = 0, start = 0, esc = false; for (let i = 0; i < s.length; i++) { const ch = s[i]; if (esc) { esc = false; continue; } if (q === '"' && ch === '\\') { esc = true; continue; } if (!q && (ch === '"' || ch === "'")) q = ch; else if (q === ch) q = null; else if (!q && (ch === '[' || ch === '{')) d++; else if (!q && (ch === ']' || ch === '}')) d--; else if (!q && d === 0 && ch === ',') { parts.push(s.slice(start, i).trim()); start = i + 1; } } const tail = s.slice(start).trim(); if (tail) parts.push(tail); return parts; }
 
-export function normalizeRouting(serverConfig, poolSize = 1) {
-  const maxRetries = Math.max(1, Number(serverConfig.maxRetries ?? serverConfig.max_retries ?? 1));
-  const explicitMaxAttempts = Number(serverConfig.maxAttemptsPerRequest ?? serverConfig.max_attempts_per_request ?? 0);
-  return {
-    routingStrategy: serverConfig.routingStrategy ?? serverConfig.routing_strategy ?? 'sticky_failover',
-    maxAttemptsPerRequest: explicitMaxAttempts > 0 ? explicitMaxAttempts : Math.max(1, poolSize * maxRetries),
-    failureCooldownSeconds: Math.max(0, Number(serverConfig.failureCooldownSeconds ?? serverConfig.failure_cooldown_seconds ?? 60)),
-    retryBackoffSeconds: Math.max(0, Number(serverConfig.retryBackoffSeconds ?? serverConfig.retry_backoff_seconds ?? 0)),
-    retryOnAnyAcpError: asBool(serverConfig.retryOnAnyAcpError ?? serverConfig.retry_on_any_acp_error, false),
-    affinityPrefixChars: Math.max(128, Number(serverConfig.affinityPrefixChars ?? serverConfig.affinity_prefix_chars ?? 4096))
-  };
-}
-
-export function writeDefaultConfig(filePath) {
-  fs.writeFileSync(filePath, defaultConfigText(), 'utf8');
-}

@@ -294,3 +294,97 @@ test('chat streaming emits SSE chunks and DONE', async () => {
     assert.match(text, /data: \[DONE\]/);
   });
 });
+
+test('streaming usage emits finish chunk without usage then a separate choices:[] usage chunk', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'round_robin' },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'gemini', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(r.status, 200);
+    const lines = (await r.text()).split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
+    const finishChunk = lines.find((c) => c.choices?.[0]?.finish_reason === 'stop');
+    assert.ok(finishChunk, 'should have a finish_reason:stop chunk');
+    assert.equal(finishChunk.usage, undefined, 'finish chunk must not carry usage');
+    const usageChunk = lines.find((c) => Array.isArray(c.choices) && c.choices.length === 0 && c.usage);
+    assert.ok(usageChunk, 'should have a separate usage-only chunk');
+    assert.ok(usageChunk.usage.total_tokens > 0);
+  });
+});
+
+test('image capability gating returns 400 when agent does not advertise image support', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
+    agents: [agent('gemini', 'a', { ACP_FAKE_NO_IMAGE: '1' })]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, {
+      model: 'gemini',
+      messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } }] }]
+    });
+    assert.equal(r.status, 400);
+    const body = await r.json();
+    assert.match(body.error.message, /image/i);
+  });
+});
+
+test('model_selection with required:false succeeds when requested model id has no mapped value', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [{
+      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
+      models: ['gemini'],
+      model_selection: { config_id: 'model', required: false, values: { 'gemini-flash': 'flash' } }
+    }]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hello' }] });
+    assert.equal(r.status, 200);
+  });
+});
+
+test('max_request_bytes config enforces 413 for oversized bodies', async () => {
+  await withApp({
+    server: { ...baseServer, maxRequestBytes: 1024 },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'x'.repeat(1100) }] });
+    assert.equal(r.status, 413);
+  });
+});
+
+test('conversation_id body field provides sticky routing affinity', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'sticky_failover', maxRetries: 1 },
+    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+  }, async ({ baseUrl }) => {
+    const seen = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = await post(baseUrl, { model: 'gemini', conversation_id: 'convo-xyz', messages: [{ role: 'user', content: `turn ${i}` }] });
+      assert.equal(r.status, 200);
+      seen.push(r.headers.get('x-acp-agent'));
+    }
+    assert.equal(new Set(seen).size, 1, 'all requests with same conversation_id should route to the same agent');
+  });
+});
+
+test('/v1/responses non-streaming with multimodal data URI image', async () => {
+  await withApp({
+    server: { ...baseServer, routingStrategy: 'primary_failover' },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await fetch(`${baseUrl}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+      body: JSON.stringify({
+        model: 'gemini',
+        input: [{ role: 'user', content: [
+          { type: 'input_text', text: 'describe' },
+          { type: 'input_image', image_url: 'data:image/png;base64,aGVsbG8=' }
+        ] }]
+      })
+    });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.object, 'response');
+    assert.match(body.output_text, /\[image:image\/png\]/);
+  });
+});

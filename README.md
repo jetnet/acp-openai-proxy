@@ -54,6 +54,8 @@ You can also configure logging in `config.json`:
 
 Environment variables override the config values when set.
 
+Configuration may also be written in a **minimal TOML subset** (see `examples/config.toml`). Multi-line strings, numeric underscores, and TOML datetimes are not supported.
+
 Example request:
 
 ```bash
@@ -326,6 +328,8 @@ Permission modes:
 
 `deny` is the default. `allow` should only be used in trusted disposable sandboxes.
 
+The `read_only` mode uses keyword-substring heuristics on permission-request params to decide what to approve. It is best-effort, not a guarantee — use `deny` for hostile or untrusted CLIs.
+
 ## Docker
 
 Build:
@@ -367,7 +371,7 @@ The image build installs these packages by default:
 - `@agentclientprotocol/claude-agent-acp@latest`
 - `@github/copilot@latest`
 
-Additional ACP CLIs:
+### Reference startup shapes (not installed by default Docker image)
 
 | Agent | Command | Persistent home |
 | --- | --- | --- |
@@ -396,4 +400,4 @@ npm run check
 npm test
 ```
 
-Current expected test result: 9 passing tests.
+Current expected test result: 19 passing tests.

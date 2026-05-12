@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+const PKG_VERSION = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')).version;
 
 export class AcpError extends Error {
     constructor(message, options) {
@@ -169,7 +173,7 @@ export class AcpConnection {
             {
                 protocolVersion: 1,
                 clientCapabilities: {},
-                clientInfo: { name: "acp-openai-proxy", version: "0.1.0" },
+                clientInfo: { name: "acp-openai-proxy", version: PKG_VERSION },
             },
             this.config.startupTimeoutSeconds,
         );
@@ -185,7 +189,7 @@ export class AcpConnection {
     async request(
         method,
         params = undefined,
-        timeoutSeconds = this.config.requestTimeoutSeconds,
+        timeoutSeconds = this.config.requestTimeoutSeconds ?? 3600,
     ) {
         if (!this.running)
             throw new AcpProcessExited(
@@ -318,6 +322,13 @@ export class AcpConnection {
     }
     onStdout(chunk) {
         this.stdoutBuffer += chunk;
+        const MAX_STDOUT_LINE = 16 * 1024 * 1024;
+        if (this.stdoutBuffer.length > MAX_STDOUT_LINE && this.stdoutBuffer.indexOf('\n') < 0) {
+            this.logger.error?.('ACP agent stdout line too large', { agent: this.config.instanceId, size: this.stdoutBuffer.length });
+            this.failAll(new AcpProcessExited(`ACP agent ${this.config.instanceId} stdout exceeded ${MAX_STDOUT_LINE}b without newline`));
+            this.stdoutBuffer = '';
+            return;
+        }
         while (true) {
             const index = this.stdoutBuffer.indexOf("\n");
             if (index < 0) break;
@@ -340,6 +351,9 @@ export class AcpConnection {
     }
     onStderr(chunk) {
         this.stderrBuffer += chunk;
+        const MAX_STDERR_BUF = 1024 * 1024;
+        if (this.stderrBuffer.length > MAX_STDERR_BUF && this.stderrBuffer.indexOf('\n') < 0)
+            this.stderrBuffer = this.stderrBuffer.slice(-MAX_STDERR_BUF);
         while (true) {
             const index = this.stderrBuffer.indexOf("\n");
             if (index < 0) break;

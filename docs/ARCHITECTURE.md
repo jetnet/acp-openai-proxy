@@ -274,7 +274,8 @@ The proxy resolves a routing key in priority order:
 1. **Headers:** `X-ACP-Routing-Key`, `X-Routing-Key`, `X-Prompt-Cache-Key`, `OpenAI-Conversation-ID`
 2. **Body fields:** `x_acp_routing_key`, `routing_key`, `prompt_cache_key`, `cache_key`, `user`, `session_id`, `conversation_id`, `thread_id`
 3. **Metadata:** same field names inside `body.metadata`
-4. **Fallback:** SHA-256 hash of the first `affinity_prefix_chars` (default 4096) prompt characters
+4. **Fallback:** BLAKE2b-512 hash (truncated to 32 hex chars) of the first `affinity_prefix_chars` (default 4096) prompt characters
+5. Body fields `session_id`, `conversation_id`, `thread_id` are used only for routing affinity; they are not forwarded to ACP.
 
 ### 5.4  Retry and failover
 
@@ -469,6 +470,7 @@ Supports JSON (recommended) and a minimal TOML subset. The old `env_sections` in
 | `retry_backoff_seconds` | `0` | Pause between retry attempts |
 | `retry_on_any_acp_error` | `false` | Make all ACP errors retryable |
 | `affinity_prefix_chars` | `4096` | Prompt prefix length for sticky key hash |
+| `max_request_bytes` | `67108864` (64 MiB) | Maximum accepted request body size; returns 413 if exceeded |
 
 ### 8.3  Agent configuration
 
@@ -656,7 +658,7 @@ Persistent session database, remote file downloader, provider plugin registry, p
 
 ```bash
 npm run check   # Syntax check all source files
-npm test         # Run integration tests (9 passing)
+npm test         # Run integration tests (19 passing)
 ```
 
-Tests cover: duplicate model pools, round-robin rotation, primary-failover retry, all-runtimes-failed 502, sticky routing, multimodal forwarding, client tool calls, streaming tool-call deltas, streaming SSE with `[DONE]`.
+Tests cover: logger stdout/stderr routing, logger text format, config logging normalization, env expansion and rejected env_sections, model_selection mapping, round-robin pool with duplicate model ids, primary-failover retry on quota-like failures, all-runtimes-failed 502, sticky_failover affinity, multimodal data URI, OpenAI client-tool envelope, streaming tool-call deltas, streaming SSE chunks + DONE + usage, streaming usage on a separate choices:[] chunk, image capability gating, model_selection required:false fallback, max_request_bytes 413, conversation_id routing affinity, /v1/responses non-streaming multimodal.

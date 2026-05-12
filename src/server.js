@@ -41,7 +41,6 @@ export function createProxyServer(config, { logger = createLogger() } = {}) {
     handleRequest(manager, req, res).catch((error) => sendCaughtError(manager, res, error));
   });
   server.manager = manager;
-  server.proxy = { prewarm: () => manager.startBootAgents(), close: () => manager.close() };
   server.startBootAgents = () => manager.startBootAgents();
   server.closeProxy = async () => {
     await new Promise((resolve) => server.close(() => resolve()));
@@ -50,7 +49,6 @@ export function createProxyServer(config, { logger = createLogger() } = {}) {
   return server;
 }
 
-export const createServer = createProxyServer;
 export class AcpOpenAiServer {
   constructor(config, options = {}) {
     this.config = config;
@@ -179,13 +177,19 @@ function runtimeHealth(runtime) {
   };
 }
 
+function validateRequest(body, kind) {
+  if (kind === 'chat') buildChatPrompt(body, PERMISSIVE_CAPS);
+  else if (kind === 'completion') buildCompletionPrompt(body);
+  else buildResponsesPrompt(body, PERMISSIVE_CAPS);
+}
+
 async function handleChat(manager, req, res) {
-  const body = await readJsonBody(req);
+  const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
   const model = modelOrDefault(body, manager.defaultModel);
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'chat');
-  const routePrompt = buildChatPrompt(body, PERMISSIVE_CAPS);
-  const result = await runWithFailover(manager, pool, req, body, routePrompt, async (runtime) => {
+  validateRequest(body, 'chat');
+  const result = await runWithFailover(manager, pool, req, body, async (runtime) => {
     await runtime.ensureStarted();
     const promptBlocks = buildChatPrompt(body, runtime.connection.capabilities);
     const collected = await collectRuntime(runtime, promptBlocks, model);
@@ -199,12 +203,12 @@ async function handleChat(manager, req, res) {
 }
 
 async function handleCompletion(manager, req, res) {
-  const body = await readJsonBody(req);
+  const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
   const model = modelOrDefault(body, manager.defaultModel);
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'completion');
-  const routePrompt = buildCompletionPrompt(body);
-  const result = await runWithFailover(manager, pool, req, body, routePrompt, async (runtime) => {
+  validateRequest(body, 'completion');
+  const result = await runWithFailover(manager, pool, req, body, async (runtime) => {
     await runtime.ensureStarted();
     const promptBlocks = buildCompletionPrompt(body);
     const collected = await collectRuntime(runtime, promptBlocks, model);
@@ -217,12 +221,12 @@ async function handleCompletion(manager, req, res) {
 }
 
 async function handleResponses(manager, req, res) {
-  const body = await readJsonBody(req);
+  const body = await readJsonBody(req, manager.config.server.maxRequestBytes);
   const model = modelOrDefault(body, manager.defaultModel);
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'responses');
-  const routePrompt = buildResponsesPrompt(body, PERMISSIVE_CAPS);
-  const result = await runWithFailover(manager, pool, req, body, routePrompt, async (runtime) => {
+  validateRequest(body, 'responses');
+  const result = await runWithFailover(manager, pool, req, body, async (runtime) => {
     await runtime.ensureStarted();
     const promptBlocks = buildResponsesPrompt(body, runtime.connection.capabilities);
     const collected = await collectRuntime(runtime, promptBlocks, model);
@@ -234,7 +238,7 @@ async function handleResponses(manager, req, res) {
   });
 }
 
-async function runWithFailover(manager, pool, req, body, routePrompt, operation) {
+async function runWithFailover(manager, pool, req, body, operation) {
   const attempts = pool.attemptOrder(routingKeyFromRequest(req, body, pool.affinityPrefixChars));
   const failures = [];
   for (const runtime of attempts) {
@@ -254,7 +258,7 @@ async function runWithFailover(manager, pool, req, body, routePrompt, operation)
 }
 
 async function streamEndpoint(manager, pool, req, res, body, model, kind) {
-  const routePrompt = kind === 'chat' ? buildChatPrompt(body, PERMISSIVE_CAPS) : kind === 'completion' ? buildCompletionPrompt(body) : buildResponsesPrompt(body, PERMISSIVE_CAPS);
+  validateRequest(body, kind);
   const attempts = pool.attemptOrder(routingKeyFromRequest(req, body, pool.affinityPrefixChars));
   const failures = [];
   const includeUsage = Boolean(body.stream_options?.include_usage || body.streamOptions?.includeUsage);
@@ -363,20 +367,17 @@ function writeStreamToolCalls(res, id, model, created, toolCalls) {
 }
 
 function writeStreamFinal(res, kind, id, model, created, promptBlocks, text, stopReason, usageOverride) {
-  const usage = usageOverride ? responseUsage(promptBlocks, text, usageOverride) : undefined;
   if (kind === 'completion') {
-    const chunk = { id, object: 'text_completion', created, model, choices: [{ index: 0, text: '', logprobs: null, finish_reason: finishReason(stopReason) }] };
-    if (usage) chunk.usage = usage;
-    res.write(sseData(chunk));
+    res.write(sseData({ id, object: 'text_completion', created, model, choices: [{ index: 0, text: '', logprobs: null, finish_reason: finishReason(stopReason) }] }));
+    if (usageOverride) res.write(sseData({ id, object: 'text_completion', created, model, choices: [], usage: responseUsage(promptBlocks, text, usageOverride) }));
   } else if (kind === 'responses') {
     const response = responsesApiResponse(model, promptBlocks, text, stopReason, usageOverride);
     response.id = id;
     response.created_at = created;
     res.write(sseData({ type: 'response.completed', response }));
   } else {
-    const chunk = { id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: finishReason(stopReason) }] };
-    if (usage) chunk.usage = usage;
-    res.write(sseData(chunk));
+    res.write(sseData({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: finishReason(stopReason) }] }));
+    if (usageOverride) res.write(sseData({ id, object: 'chat.completion.chunk', created, model, choices: [], usage: responseUsage(promptBlocks, text, usageOverride) }));
   }
 }
 

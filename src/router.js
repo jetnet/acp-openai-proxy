@@ -28,13 +28,6 @@ export class AgentPool {
   get runtimeIds() { return this.runtimes.map((runtime) => runtime.runtimeId); }
   get routingStrategy() { return this.strategy; }
   get size() { return this.runtimes.length; }
-  agentIds() { return this.runtimeIds; }
-
-  orderedAttempts({ body = {}, headers = {}, promptBlocks = [] } = {}) {
-    const request = { headers };
-    const key = routingKeyFromRequest(request, body, this.affinityPrefixChars) || routeKeyFromPromptBlocks(promptBlocks, this.affinityPrefixChars);
-    return this.attemptOrder(key);
-  }
 
   attemptOrder(routingKey) {
     let base = this.baseOrder(routingKey);
@@ -68,10 +61,6 @@ export class AgentPool {
   }
 }
 
-export function buildPools(config, RuntimeClass = AgentRuntime, logger = console) {
-  return createRuntimesAndPools(config, RuntimeClass, logger);
-}
-
 export function createRuntimesAndPools(config, RuntimeClass = AgentRuntime, logger = console) {
   const runtimes = config.agents.map((agent) => new RuntimeClass(agent, logger));
   const byModel = new Map();
@@ -88,7 +77,7 @@ export function createRuntimesAndPools(config, RuntimeClass = AgentRuntime, logg
   return { runtimes, pools };
 }
 
-export function isRetryableAcpFailure(error, serverConfig = {}) {
+function isRetryableAcpFailure(error, serverConfig = {}) {
   if (serverConfig.retryOnAnyAcpError || serverConfig.retry_on_any_acp_error) return true;
   if (error instanceof AgentCapabilityError) return false;
   if (error instanceof AcpProcessExited) return true;
