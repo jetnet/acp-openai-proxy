@@ -23,7 +23,7 @@ export function createLogger({
             time: new Date().toISOString(),
             level: name,
             service,
-            msg: String(message),
+            msg: redact(String(message), STRING_MAX),
             ...cleanFields(fields),
         };
         stream.write(
@@ -49,14 +49,25 @@ function cleanFields(fields) {
     return out;
 }
 
+const STACK_MAX = 4 * 1024;
+const STRING_MAX = 8 * 1024;
+const SECRET_RE = /(?:Bearer\s+\S+|sk-[A-Za-z0-9_-]{16,}|sk_[A-Za-z0-9_-]{16,}|gh[ps]_[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_-]{20,}|ghu_[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,})/g;
+
+function redact(text, max) {
+    if (typeof text !== "string") return text;
+    const s = text.replace(SECRET_RE, "<redacted>");
+    return s.length > max ? s.slice(0, max) + "…[truncated]" : s;
+}
+
 function formatValue(value) {
     if (value instanceof Error) {
         return {
             name: value.name,
-            message: value.message,
-            stack: value.stack,
+            message: redact(value.message ?? "", STRING_MAX),
+            stack: redact(value.stack ?? "", STACK_MAX),
         };
     }
+    if (typeof value === "string") return redact(value, STRING_MAX);
     return value;
 }
 

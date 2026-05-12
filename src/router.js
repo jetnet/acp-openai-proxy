@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { AcpError, AcpProcessExited, AgentRuntime, JsonRpcError } from './acpClient.js';
+import { AcpError, AcpProcessExited, AgentRuntime, JsonRpcError, QueueFullError } from './acpClient.js';
 import { AgentCapabilityError } from './openaiCompat.js';
 
 const RETRYABLE_MARKERS = [
@@ -78,6 +78,7 @@ export function createRuntimesAndPools(config, RuntimeClass = AgentRuntime, logg
 }
 
 function isRetryableAcpFailure(error, serverConfig = {}) {
+  if (error instanceof QueueFullError) return true;
   if (serverConfig.retryOnAnyAcpError || serverConfig.retry_on_any_acp_error) return true;
   if (error instanceof AgentCapabilityError) return false;
   if (error instanceof AcpProcessExited) return true;

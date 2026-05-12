@@ -38,6 +38,14 @@ export class AcpProcessExited extends AcpError {
         this.name = "AcpProcessExited";
     }
 }
+export class QueueFullError extends AcpError {
+    constructor(message) {
+        super(message);
+        this.name = "QueueFullError";
+        this.status = 503;
+        this.type = "service_unavailable";
+    }
+}
 
 export class AsyncMutex {
     constructor() {
@@ -46,6 +54,9 @@ export class AsyncMutex {
     }
     get isLocked() {
         return this.locked;
+    }
+    get queueDepth() {
+        return this.waiters.length;
     }
     acquire() {
         if (!this.locked) {
@@ -519,7 +530,7 @@ export class AgentRuntime {
         this.failureCount += 1;
         this.consecutiveFailures += 1;
         this.lastFailureAt = Date.now();
-        this.lastError = error?.message ?? String(error);
+        this.lastError = truncate(redactSecrets(error?.message ?? String(error)), 512);
         if (cooldownSeconds > 0)
             this.cooldownUntil = Date.now() + cooldownSeconds * 1000;
     }
@@ -537,6 +548,10 @@ export class AgentRuntime {
         await this.connection.close();
     }
     async *streamPrompt(promptBlocks, signal = undefined, options = {}) {
+        const maxQueueDepth = this.config.maxQueueDepth ?? 8;
+        if (this.promptMutex.queueDepth >= maxQueueDepth) {
+            throw new QueueFullError(`agent ${this.runtimeId} queue full (depth=${this.promptMutex.queueDepth}, max=${maxQueueDepth})`);
+        }
         const release = await this.promptMutex.acquire();
         let conn;
         let sessionId;
@@ -564,10 +579,12 @@ export class AgentRuntime {
                 .then((result) => {
                     promptDone = true;
                     promptResult = result;
+                    queue.push({ __wake: true });
                 })
                 .catch((error) => {
                     promptDone = true;
                     promptError = error;
+                    queue.push({ __wake: true });
                 });
             const abortListener = () => {
                 if (sessionId) conn.cancelSession(sessionId).catch(() => {});
@@ -577,8 +594,9 @@ export class AgentRuntime {
             try {
                 while (true) {
                     if (promptDone && queue.empty) break;
-                    const item = await queue.next(100);
+                    const item = await queue.next(5000);
                     if (item?.__timeout) continue;
+                    if (item?.__wake) continue;
                     if (item?.__closed)
                         throw new AcpProcessExited(
                             item.reason ?? "ACP connection closed",
@@ -890,6 +908,16 @@ export function permissionLooksReadOnly(params) {
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function truncate(text, max) {
+    const s = String(text ?? "");
+    return s.length > max ? s.slice(0, max) + "…[truncated]" : s;
+}
+const SECRET_RE = /(?:Bearer\s+\S+|sk-[A-Za-z0-9_-]{16,}|sk_[A-Za-z0-9_-]{16,}|gh[ps]_[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_-]{20,}|ghu_[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,})/g;
+function redactSecrets(text) {
+    return String(text ?? "").replace(SECRET_RE, "<redacted>");
+}
+export { redactSecrets, truncate };
 
 function buildAgentEnv(config) {
     const allow = Array.isArray(config.envPassthrough) ? config.envPassthrough : [];

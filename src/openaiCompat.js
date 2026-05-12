@@ -3,6 +3,47 @@ import crypto from 'node:crypto';
 export class BadRequest extends Error { constructor(message) { super(message); this.name = 'BadRequest'; } }
 export class AgentCapabilityError extends BadRequest { constructor(message) { super(message); this.name = 'AgentCapabilityError'; } }
 
+export function validateResourceLinks(blocks, policy) {
+  if (!policy) return;
+  for (const block of blocks) {
+    if (!block || block.type !== 'resource_link' || typeof block.uri !== 'string') continue;
+    const reason = checkResourceUrl(block.uri, policy);
+    if (reason) throw new BadRequest(`resource_link rejected (${reason}): ${block.uri.slice(0, 200)}`);
+  }
+}
+
+function checkResourceUrl(uri, policy) {
+  if (uri.length > policy.maxUriLength) return `uri exceeds max_uri_length ${policy.maxUriLength}`;
+  let u;
+  try { u = new URL(uri); } catch { return 'invalid uri'; }
+  const scheme = u.protocol.replace(':', '').toLowerCase();
+  if (scheme === 'file') {
+    if (!policy.allowFileUri) return 'file:// URIs are not allowed';
+    return null;
+  }
+  if (policy.allowedSchemes.length && !policy.allowedSchemes.includes(scheme)) return `scheme '${scheme}' is not in allowed_schemes`;
+  if (policy.denyPrivateNetworks && isPrivateHost(u.hostname)) return `host '${u.hostname}' resolves to a private/loopback network`;
+  return null;
+}
+
+function isPrivateHost(host) {
+  if (!host) return false;
+  const lower = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (lower === 'localhost' || lower === '::1') return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(lower);
+  if (v4) {
+    const a = Number(v4[1]), b = Number(v4[2]);
+    if (a === 127 || a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  if (/^(?:fc|fd)/i.test(lower)) return true; // IPv6 unique-local
+  if (/^fe80/i.test(lower)) return true; // IPv6 link-local
+  return false;
+}
+
 const DATA_URI_RE = /^data:([^;,]+);base64,(.*)$/is;
 const AUDIO_FORMAT_TO_MIME = { wav: 'audio/wav', wave: 'audio/wav', mp3: 'audio/mpeg', mpeg: 'audio/mpeg', mpga: 'audio/mpeg', mp4: 'audio/mp4', m4a: 'audio/mp4', webm: 'audio/webm', ogg: 'audio/ogg', oga: 'audio/ogg', flac: 'audio/flac' };
 const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -215,4 +256,12 @@ export function responseUsage(promptBlocks, completionText, usageOverride = null
 export function finishReason(stopReason) { return { end_turn: 'stop', max_tokens: 'length', max_turn_requests: 'length', refusal: 'content_filter', cancelled: 'stop', tool_calls: 'tool_calls' }[stopReason] ?? 'stop'; }
 export function chatCompletionResponse(model, promptBlocks, text, stopReason = 'end_turn', usageOverride = null, toolCalls = []) { const message = toolCalls?.length ? { role: 'assistant', content: null, tool_calls: toolCalls } : { role: 'assistant', content: text }; return { id: makeId('chatcmpl'), object: 'chat.completion', created: now(), model, choices: [{ index: 0, message, finish_reason: toolCalls?.length ? 'tool_calls' : finishReason(stopReason) }], usage: responseUsage(promptBlocks, text, usageOverride) }; }
 export function completionResponse(model, promptBlocks, text, stopReason = 'end_turn', usageOverride = null) { return { id: makeId('cmpl'), object: 'text_completion', created: now(), model, choices: [{ index: 0, text, finish_reason: finishReason(stopReason), logprobs: null }], usage: responseUsage(promptBlocks, text, usageOverride) }; }
-export function responsesApiResponse(model, promptBlocks, text, stopReason = 'end_turn', usageOverride = null) { const outputId = makeId('msg'); return { id: makeId('resp'), object: 'response', created_at: now(), status: 'completed', model, output: [{ id: outputId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text, annotations: [] }] }], output_text: text, error: null, incomplete_details: null, usage: responseUsage(promptBlocks, text, usageOverride), metadata: {} }; }
+const RESPONSES_STATUS_BY_STOP = { end_turn: 'completed', tool_calls: 'completed', max_tokens: 'incomplete', max_turn_requests: 'incomplete', refusal: 'incomplete', cancelled: 'incomplete' };
+const RESPONSES_INCOMPLETE_BY_STOP = { max_tokens: { reason: 'max_output_tokens' }, max_turn_requests: { reason: 'max_output_tokens' }, refusal: { reason: 'content_filter' }, cancelled: { reason: 'cancelled' } };
+export function responsesApiResponse(model, promptBlocks, text, stopReason = 'end_turn', usageOverride = null) {
+  const status = RESPONSES_STATUS_BY_STOP[stopReason] ?? 'completed';
+  const incompleteDetails = RESPONSES_INCOMPLETE_BY_STOP[stopReason] ?? null;
+  const outputId = makeId('msg');
+  const outputStatus = status === 'completed' ? 'completed' : 'incomplete';
+  return { id: makeId('resp'), object: 'response', created_at: now(), status, model, output: [{ id: outputId, type: 'message', status: outputStatus, role: 'assistant', content: [{ type: 'output_text', text, annotations: [] }] }], output_text: text, error: null, incomplete_details: incompleteDetails, usage: responseUsage(promptBlocks, text, usageOverride), metadata: {} };
+}

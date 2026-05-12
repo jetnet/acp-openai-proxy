@@ -418,6 +418,25 @@ test('bearer auth accepts lowercase scheme and rejects mismatched length', async
   });
 });
 
+test('expandEnv {var:NAME:?msg} throws on missing required env', async () => {
+  const { expandEnv } = await import('../src/config.js');
+  const previous = process.env.ACP_TEST_REQUIRED_VAR;
+  try {
+    delete process.env.ACP_TEST_REQUIRED_VAR;
+    assert.throws(() => expandEnv('{var:ACP_TEST_REQUIRED_VAR:?must be set}'),
+      /required environment variable ACP_TEST_REQUIRED_VAR is not set: must be set/);
+    process.env.ACP_TEST_REQUIRED_VAR = 'present';
+    assert.equal(expandEnv('{var:ACP_TEST_REQUIRED_VAR:?must be set}'), 'present');
+    assert.equal(expandEnv('${ACP_TEST_REQUIRED_VAR:?must be set}'), 'present');
+    // :- fallback still works
+    delete process.env.ACP_TEST_REQUIRED_VAR;
+    assert.equal(expandEnv('{var:ACP_TEST_REQUIRED_VAR:-default}'), 'default');
+  } finally {
+    if (previous === undefined) delete process.env.ACP_TEST_REQUIRED_VAR;
+    else process.env.ACP_TEST_REQUIRED_VAR = previous;
+  }
+});
+
 test('permissionLooksReadOnly uses ACP kind directly and tightens fallback regex', () => {
   // ACP-spec kinds win regardless of title content.
   assert.equal(permissionLooksReadOnly({ toolCall: { kind: 'read', title: 'read_file' } }), true);
@@ -469,6 +488,152 @@ test('env_passthrough wildcard inherits all parent env to agent', async () => {
     if (original === undefined) delete process.env.ACP_FAKE_LEAK_TEST;
     else process.env.ACP_FAKE_LEAK_TEST = original;
   }
+});
+
+test('/readyz returns 200 when no startAtBoot agents are configured', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await fetch(`${baseUrl}/readyz`);
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.ok, true);
+  });
+});
+
+test('logger redacts bearer/sk-/github tokens and truncates long stacks', async () => {
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  const out = [];
+  process.stdout.write = (c, ...a) => { out.push(String(c)); if (typeof a.at(-1) === 'function') a.at(-1)(); return true; };
+  process.stderr.write = (c, ...a) => { out.push(String(c)); if (typeof a.at(-1) === 'function') a.at(-1)(); return true; };
+  try {
+    const logger = createLogger({ level: 'debug', service: 'test' });
+    logger.info('reveal Bearer sk-1234567890ABCDEFG and ghp_abcdefghij0123456789', {});
+    const err = new Error('failed with token ghp_xxxxxxxxxxxxxxxxxxxx');
+    err.stack = err.stack + '\n' + 'a'.repeat(10000);
+    logger.error('boom', err);
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+  }
+  const all = out.join('');
+  assert.doesNotMatch(all, /Bearer sk-1234567890/);
+  assert.doesNotMatch(all, /ghp_abcdefghij0123456789/);
+  assert.match(all, /<redacted>/);
+  assert.match(all, /truncated/);
+});
+
+test('max_queue_depth rejects excess concurrent requests with 503 + Retry-After', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [{ ...agent('gemini', 'a', { ACP_FAKE_PROMPT_DELAY_MS: '300' }), max_queue_depth: 2 }]
+  }, async ({ baseUrl }) => {
+    const responses = await Promise.all([1, 2, 3, 4].map(() =>
+      post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'queue test' }] })
+    ));
+    const statuses = responses.map((r) => r.status).sort();
+    assert.deepEqual(statuses, [200, 200, 200, 503], `expected three 200s and one 503; got ${statuses}`);
+    const rejected = responses.find((r) => r.status === 503);
+    assert.equal(rejected.headers.get('retry-after'), '1', 'queue-full response should include retry-after');
+  });
+});
+
+test('resource_links policy can deny file:// URIs and private networks', async () => {
+  await withApp({
+    server: {
+      ...baseServer,
+      resource_links: { allowed_schemes: ['https'], allow_file_uri: false, deny_private_networks: true }
+    },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const fileUri = await post(baseUrl, {
+      model: 'gemini',
+      messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'file:///etc/passwd' } }] }]
+    });
+    assert.equal(fileUri.status, 400);
+    assert.match((await fileUri.json()).error.message, /file:\/\/ URIs are not allowed/);
+
+    const linkLocal = await post(baseUrl, {
+      model: 'gemini',
+      messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'http://169.254.169.254/latest/meta-data/' } }] }]
+    });
+    assert.equal(linkLocal.status, 400);
+    assert.match((await linkLocal.json()).error.message, /allowed_schemes|private/);
+
+    const allowed = await post(baseUrl, {
+      model: 'gemini',
+      messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/x.png' } }] }]
+    });
+    assert.equal(allowed.status, 200);
+  });
+});
+
+test('resource_links default policy is permissive (no behaviour change for existing configs)', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, {
+      model: 'gemini',
+      messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'file:///workspace/file.txt' } }] }]
+    });
+    assert.equal(r.status, 200);
+  });
+});
+
+test('chat streaming first chunk delta carries role assistant', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await post(baseUrl, { model: 'gemini', stream: true, messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(r.status, 200);
+    const text = await r.text();
+    const lines = text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
+    assert.ok(lines.length > 0);
+    assert.equal(lines[0].choices?.[0]?.delta?.role, 'assistant', 'first chunk must emit assistant role');
+  });
+});
+
+test('/v1/responses streaming emits response.output_text.done before completed', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a')]
+  }, async ({ baseUrl }) => {
+    const r = await fetch(`${baseUrl}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+      body: JSON.stringify({ model: 'gemini', stream: true, input: 'hi' })
+    });
+    assert.equal(r.status, 200);
+    const text = await r.text();
+    const events = text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
+    const types = events.map((e) => e.type);
+    const doneIdx = types.indexOf('response.output_text.done');
+    const completedIdx = types.indexOf('response.completed');
+    assert.ok(doneIdx >= 0, 'expected response.output_text.done event');
+    assert.ok(completedIdx > doneIdx, 'response.completed must follow response.output_text.done');
+  });
+});
+
+test('responses status maps incomplete stopReason to status:incomplete', async () => {
+  await withApp({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a', { ACP_FAKE_STOP_REASON: 'max_tokens' })]
+  }, async ({ baseUrl }) => {
+    const r = await fetch(`${baseUrl}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+      body: JSON.stringify({ model: 'gemini', input: 'hi' })
+    });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.status, 'incomplete');
+    assert.deepEqual(body.incomplete_details, { reason: 'max_output_tokens' });
+    assert.equal(body.output[0].status, 'incomplete');
+  });
 });
 
 test('client abort during streaming propagates session/cancel to the agent', async () => {

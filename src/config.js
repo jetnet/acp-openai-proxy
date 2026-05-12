@@ -87,7 +87,9 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
     affinityPrefixChars: intRange(pick('affinity_prefix_chars', ['affinityPrefixChars', 'routing_key_prefix_chars', 'routingKeyPrefixChars', 'prompt_affinity_prefix_chars', 'promptAffinityPrefixChars'], 4096), 'server.affinity_prefix_chars', { min: 128, max: 1048576 }),
     maxRequestBytes: intRange(s.max_request_bytes ?? s.maxRequestBytes ?? raw.max_request_bytes ?? 64 * 1024 * 1024, 'server.max_request_bytes', { min: 1024, max: 1024 * 1024 * 1024 }),
     requestHeaderTimeoutSeconds: numRange(s.request_header_timeout_seconds ?? s.requestHeaderTimeoutSeconds ?? raw.request_header_timeout_seconds ?? 15, 'server.request_header_timeout_seconds', { min: 1, max: 300 }),
-    keepAliveTimeoutSeconds: numRange(s.keep_alive_timeout_seconds ?? s.keepAliveTimeoutSeconds ?? raw.keep_alive_timeout_seconds ?? 5, 'server.keep_alive_timeout_seconds', { min: 0, max: 300 })
+    keepAliveTimeoutSeconds: numRange(s.keep_alive_timeout_seconds ?? s.keepAliveTimeoutSeconds ?? raw.keep_alive_timeout_seconds ?? 5, 'server.keep_alive_timeout_seconds', { min: 0, max: 300 }),
+    shutdownTimeoutSeconds: numRange(s.shutdown_timeout_seconds ?? s.shutdownTimeoutSeconds ?? raw.shutdown_timeout_seconds ?? 30, 'server.shutdown_timeout_seconds', { min: 1, max: 600 }),
+    resourceLinks: normalizeResourceLinks(s.resource_links ?? s.resourceLinks ?? raw.resource_links ?? {})
   };
   if (!['sticky_failover', 'primary_failover', 'round_robin', 'least_busy'].includes(server.routingStrategy)) {
     throw new Error('routing_strategy must be sticky_failover, primary_failover, round_robin, or least_busy');
@@ -125,7 +127,8 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
       startAtBoot: asBool(item.start_at_boot ?? item.startAtBoot ?? item.start_on_boot ?? item.startOnBoot, false),
       startupTimeoutSeconds: numRange(item.startup_timeout_seconds ?? item.startupTimeoutSeconds ?? item.startup_timeout ?? item.startupTimeout ?? 30, `agent ${name}.startup_timeout_seconds`, { min: 1, max: 3600 }),
       requestTimeoutSeconds: numRange(item.request_timeout_seconds ?? item.requestTimeoutSeconds ?? server.requestTimeoutSeconds, `agent ${name}.request_timeout_seconds`, { min: 1, max: 86400 }),
-      envPassthrough: item.env_passthrough !== undefined || item.envPassthrough !== undefined ? strList(item.env_passthrough ?? item.envPassthrough ?? [], `agent ${name}.env_passthrough`) : server.envPassthrough
+      envPassthrough: item.env_passthrough !== undefined || item.envPassthrough !== undefined ? strList(item.env_passthrough ?? item.envPassthrough ?? [], `agent ${name}.env_passthrough`) : server.envPassthrough,
+      maxQueueDepth: intRange(item.max_queue_depth ?? item.maxQueueDepth ?? 8, `agent ${name}.max_queue_depth`, { min: 0, max: 10000 })
     };
     if (!agent.command) throw new Error(`agent ${name} command must not be empty`);
     return agent;
@@ -207,10 +210,16 @@ function strDict(v, field, { expand = true } = {}) {
   return out;
 }
 export function expandEnv(s) {
+  const expand = (name, op, arg) => {
+    const value = process.env[name];
+    if (value !== undefined && value !== '') return value;
+    if (op === ':?') throw new Error(`required environment variable ${name} is not set${arg ? ': ' + arg : ''}`);
+    return arg ?? '';
+  };
   return s
-    .replace(/\{var:([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (_, name, fallback = '') => process.env[name] ?? fallback)
-    .replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (_, name, fallback = '') => process.env[name] ?? fallback)
-    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, a, fallback = '', b) => process.env[a || b] ?? fallback);
+    .replace(/\{(?:var|env):([A-Za-z_][A-Za-z0-9_]*)(?:(:-|:\?)([^}]*))?\}/g, (_, name, op, arg) => expand(name, op, arg))
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:-|:\?)([^}]*))?\}/g, (_, name, op, arg) => expand(name, op, arg))
+    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => process.env[name] ?? '');
 }
 function asBool(v, fallback = false) {
   if (v === undefined || v === null) return fallback;
@@ -243,6 +252,16 @@ function nonEmptyString(value, field) {
     throw new Error(`${field} must be a non-empty string; got ${JSON.stringify(value)}`);
   }
   return value;
+}
+
+function normalizeResourceLinks(raw) {
+  const r = isObj(raw) ? raw : {};
+  return {
+    allowedSchemes: (r.allowed_schemes ?? r.allowedSchemes ?? ['http', 'https', 'file']).map((s) => String(s).toLowerCase()),
+    denyPrivateNetworks: asBool(r.deny_private_networks ?? r.denyPrivateNetworks, false),
+    allowFileUri: asBool(r.allow_file_uri ?? r.allowFileUri, true),
+    maxUriLength: intRange(r.max_uri_length ?? r.maxUriLength ?? 4096, 'server.resource_links.max_uri_length', { min: 32, max: 65536 })
+  };
 }
 
 function isLoopbackHost(host) {

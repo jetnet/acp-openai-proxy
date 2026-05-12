@@ -9,7 +9,9 @@ const NO_IMAGE = ['1', 'true', 'yes'].includes(String(process.env.ACP_FAKE_NO_IM
 const MODEL_OPTIONS = String(process.env.ACP_FAKE_MODEL_OPTIONS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const TOOL_CALL = String(process.env.ACP_FAKE_TOOL_CALL || '');
 const SLOW_STREAM_MS = Number(process.env.ACP_FAKE_SLOW_STREAM_MS || 0);
+const PROMPT_DELAY_MS = Number(process.env.ACP_FAKE_PROMPT_DELAY_MS || 0);
 const CANCEL_LOG = process.env.ACP_FAKE_CANCEL_LOG || '';
+const STOP_REASON = String(process.env.ACP_FAKE_STOP_REASON || 'end_turn');
 let sessionCounter = 0;
 const sessions = new Map();
 const cancellers = new Map();
@@ -86,6 +88,7 @@ rl.on('line', async (line) => {
     if (FAIL_PROMPT === 'exit') process.exit(23);
     const sessionId = msg.params?.sessionId;
     const prompt = textFromBlocks(msg.params?.prompt);
+    if (PROMPT_DELAY_MS > 0) await new Promise((resolve) => setTimeout(resolve, PROMPT_DELAY_MS));
     if (SLOW_STREAM_MS > 0) {
       let cancelled = false;
       cancellers.set(sessionId, () => { cancelled = true; });
@@ -122,7 +125,7 @@ rl.on('line', async (line) => {
         return;
       }
     }
-    result(msg, { stopReason: 'end_turn', usage: { input_tokens: 40, output_tokens: 7, total_tokens: 47, cached_read_tokens: 3 } });
+    result(msg, { stopReason: STOP_REASON, usage: { input_tokens: 40, output_tokens: 7, total_tokens: 47, cached_read_tokens: 3 } });
   } else if (msg.method === 'session/close') {
     sessions.delete(msg.params?.sessionId);
     result(msg, {});

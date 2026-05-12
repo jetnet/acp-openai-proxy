@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { AcpError } from './acpClient.js';
+import { AcpError, QueueFullError } from './acpClient.js';
 import { createLogger } from './logger.js';
 import {
   BadRequest,
@@ -20,7 +20,8 @@ import {
   makeId,
   now,
   clientToolContext,
-  extractClientToolCalls
+  extractClientToolCalls,
+  validateResourceLinks
 } from './openaiCompat.js';
 import {
   createRuntimesAndPools,
@@ -105,6 +106,7 @@ async function handleRequest(manager, req, res) {
   try {
     const url = new URL(req.url || '/', 'http://localhost');
     if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz')) return handleHealth(manager, res);
+    if (req.method === 'GET' && url.pathname === '/readyz') return handleReady(manager, res);
     if (!authorized(manager.config, req)) return sendOpenAiError(manager, res, openAiError('invalid or missing bearer token', 'authentication_error', 401));
     if (req.method === 'GET' && url.pathname === '/v1/models') return handleModels(manager, res);
     if (req.method === 'GET' && url.pathname.startsWith('/v1/models/')) return handleModel(manager, res, decodeURIComponent(url.pathname.slice('/v1/models/'.length)));
@@ -127,6 +129,16 @@ function authorized(config, req) {
   const expected = Buffer.from(key);
   if (provided.length !== expected.length) return false;
   return timingSafeEqual(provided, expected);
+}
+
+function handleReady(manager, res) {
+  const boot = manager.runtimes.filter((r) => r.config.startAtBoot);
+  const notReady = boot.filter((r) => !r.running);
+  if (notReady.length) {
+    jsonResponse(res, 503, { ok: false, not_ready: notReady.map((r) => r.runtimeId) }, { 'retry-after': '1' });
+    return;
+  }
+  jsonResponse(res, 200, { ok: true, ready: boot.map((r) => r.runtimeId), models: [...manager.pools.keys()] });
 }
 
 function handleHealth(manager, res) {
@@ -201,6 +213,7 @@ async function handleChat(manager, req, res) {
   const result = await runWithFailover(manager, pool, req, res, body, async (runtime, signal) => {
     await runtime.ensureStarted();
     const promptBlocks = buildChatPrompt(body, runtime.connection.capabilities);
+    validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
     const collected = await collectRuntime(runtime, promptBlocks, model, signal);
     return { runtime, promptBlocks, ...collected };
   });
@@ -220,6 +233,7 @@ async function handleCompletion(manager, req, res) {
   const result = await runWithFailover(manager, pool, req, res, body, async (runtime, signal) => {
     await runtime.ensureStarted();
     const promptBlocks = buildCompletionPrompt(body);
+    validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
     const collected = await collectRuntime(runtime, promptBlocks, model, signal);
     return { runtime, promptBlocks, ...collected };
   });
@@ -238,6 +252,7 @@ async function handleResponses(manager, req, res) {
   const result = await runWithFailover(manager, pool, req, res, body, async (runtime, signal) => {
     await runtime.ensureStarted();
     const promptBlocks = buildResponsesPrompt(body, runtime.connection.capabilities);
+    validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
     const collected = await collectRuntime(runtime, promptBlocks, model, signal);
     return { runtime, promptBlocks, ...collected };
   });
@@ -257,7 +272,9 @@ async function runWithFailover(manager, pool, req, res, body, operation) {
       return await operation(runtime, abort.signal);
     } catch (error) {
       if (abort.signal.aborted) throw new ClientAbortError('client closed the connection');
-      runtime.markFailure(error, manager.config.server.failureCooldownSeconds);
+      if (!(error instanceof QueueFullError)) {
+        runtime.markFailure(error, manager.config.server.failureCooldownSeconds);
+      }
       manager.logger.warn('runtime attempt failed', { agent: runtime.runtimeId, model: pool.model, error });
       failures.push({ runtimeId: runtime.runtimeId, message: compactError(error), error });
       if (error instanceof AgentCapabilityError) continue;
@@ -266,6 +283,11 @@ async function runWithFailover(manager, pool, req, res, body, operation) {
     }
   }
   if (allCandidateSpecificFailures(failures)) throw badRequest(formatCapabilityFailures(pool.model, failures));
+  if (failures.length > 0 && failures.every((f) => f.error instanceof QueueFullError)) {
+    const err = new AcpError(`all agents for model ${JSON.stringify(pool.model)} are at queue capacity; try again shortly`);
+    err.status = 503; err.type = 'service_unavailable';
+    throw err;
+  }
   throw new AcpError(formatRouteFailures(pool.model, failures));
 }
 
@@ -287,9 +309,13 @@ async function streamEndpoint(manager, pool, req, res, body, model, kind) {
     try {
       await runtime.ensureStarted();
       const promptBlocks = kind === 'chat' ? buildChatPrompt(body, runtime.connection.capabilities) : kind === 'completion' ? buildCompletionPrompt(body) : buildResponsesPrompt(body, runtime.connection.capabilities);
+      validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
       if (!headersSent) {
         startSse(res, { 'x-acp-agent': runtime.runtimeId, 'x-acp-model': model });
         headersSent = true;
+        if (kind === 'chat' && !bufferChatToolCalls) {
+          await writeSse(res, sseData({ id: responseId, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] }));
+        }
         if (kind === 'responses') await writeSse(res, sseData({ type: 'response.created', response: { id: responseId, object: 'response', created_at: created, status: 'in_progress', model } }));
       }
       let text = '';
@@ -391,6 +417,7 @@ async function writeStreamFinal(res, kind, id, model, created, promptBlocks, tex
     await writeSse(res, sseData({ id, object: 'text_completion', created, model, choices: [{ index: 0, text: '', logprobs: null, finish_reason: finishReason(stopReason) }] }));
     if (usageOverride) await writeSse(res, sseData({ id, object: 'text_completion', created, model, choices: [], usage: responseUsage(promptBlocks, text, usageOverride) }));
   } else if (kind === 'responses') {
+    await writeSse(res, sseData({ type: 'response.output_text.done', response_id: id, output_index: 0, content_index: 0, text }));
     const response = responsesApiResponse(model, promptBlocks, text, stopReason, usageOverride);
     response.id = id;
     response.created_at = created;
@@ -437,17 +464,18 @@ function sendCaughtError(manager, res, error) {
   }
   const status = error.status || (error instanceof BadRequest ? 400 : 502);
   const type = error.type || (status === 400 ? 'invalid_request_error' : 'acp_error');
+  const headers = status === 503 ? { 'retry-after': '1' } : {};
   manager.logger[status >= 500 ? 'error' : 'warn']('request failed', { status, type, error });
-  return sendOpenAiError(manager, res, openAiError(compactError(error), type, status));
+  return sendOpenAiError(manager, res, openAiError(compactError(error), type, status, null), headers);
 }
 
-function sendOpenAiError(manager, res, errorObj) {
+function sendOpenAiError(manager, res, errorObj, extraHeaders = {}) {
   if (res.headersSent) {
     res.end();
     return;
   }
   manager.logger.warn('sending error response', { status: errorObj.status, type: errorObj.body?.error?.type });
-  jsonResponse(res, errorObj.status, errorObj.body);
+  jsonResponse(res, errorObj.status, errorObj.body, extraHeaders);
 }
 
 function badRequest(message) {
