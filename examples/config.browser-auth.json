@@ -1,155 +1,188 @@
 {
-  "server": {
-    "host": "127.0.0.1",
-    "port": 11435,
-    "api_key": "local-proxy-token",
-    "request_timeout_seconds": 3600,
-    "routing_strategy": "sticky_failover",
-    "max_retries": 1,
-    "max_attempts_per_request": 0,
-    "failure_cooldown_seconds": 60,
-    "retry_backoff_seconds": 0,
-    "retry_on_any_acp_error": false,
-    "affinity_prefix_chars": 4096
-  },
-  "agents": [
-    {
-      "_comment": "GEMINI CLI — browser OAuth. model_selection: NOT supported (session/new returns no configOptions). One agent block per model. Pre-login: GEMINI_CLI_HOME=<dir>/gemini-a npx @google/gemini-cli@latest (triggers Google browser login). Tokens persist in GEMINI_CLI_HOME/.gemini/oauth_creds.json.",
-      "name": "gemini",
-      "instance_id": "gemini-a",
-      "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-      "cwd": ".",
-      "models": ["gemini"],
-      "env": {
-        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-a"
-      },
-      "permission": "deny"
-    },
-
-    {
-      "_comment": "CLAUDE AGENT ACP — browser OAuth. model_selection: SUPPORTED (configId=model, values: default=Sonnet 4.6, opus=Opus 4.7, haiku=Haiku 4.5, opus[1m]=Opus 4.7 1M). Pre-login: HOME=<dir>/claude-a claude (triggers Anthropic browser login). Tokens persist in HOME/.claude/.credentials.json.",
-      "name": "claude",
-      "instance_id": "claude-a",
-      "command": "npx",
-      "args": ["-y", "@agentclientprotocol/claude-agent-acp@latest"],
-      "cwd": ".",
-      "models": ["claude-sonnet", "claude-opus", "claude-haiku"],
-      "model_selection": {
-        "type": "session_config",
-        "config_id": "model",
-        "values": {
-          "claude-sonnet": "default",
-          "claude-opus":   "opus",
-          "claude-haiku":  "haiku"
-        }
-      },
-      "env": {
-        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/claude-a"
-      },
-      "permission": "deny"
-    },
-
-    {
-      "_comment": "GITHUB COPILOT — browser OAuth. model_selection: SUPPORTED (configId=model). Full model list confirmed live from session/new. Pre-login: COPILOT_HOME=<dir>/copilot-a copilot login (triggers GitHub device-code flow). Tokens persist in COPILOT_HOME/config.json (loggedInUsers key).",
-      "name": "copilot",
-      "instance_id": "copilot-a",
-      "command": "npx",
-      "args": ["-y", "@github/copilot@latest", "--acp", "--stdio", "--model", "gpt-5.2"],
-      "cwd": ".",
-      "models": [
-        "copilot-auto",
-        "copilot-claude-sonnet-4.6",
-        "copilot-claude-sonnet-4.5",
-        "copilot-claude-haiku-4.5",
-        "copilot-claude-opus-4.7",
-        "copilot-claude-opus-4.6",
-        "copilot-claude-opus-4.5",
-        "copilot-gpt-5.4",
-        "copilot-gpt-5.3-codex",
-        "copilot-gpt-5.2-codex",
-        "copilot-gpt-5.2",
-        "copilot-gpt-5-mini",
-        "copilot-gpt-4.1"
-      ],
-      "model_selection": {
-        "type": "session_config",
-        "config_id": "model",
-        "values": {
-          "copilot-auto":              "auto",
-          "copilot-claude-sonnet-4.6": "claude-sonnet-4.6",
-          "copilot-claude-sonnet-4.5": "claude-sonnet-4.5",
-          "copilot-claude-haiku-4.5":  "claude-haiku-4.5",
-          "copilot-claude-opus-4.7":   "claude-opus-4.7",
-          "copilot-claude-opus-4.6":   "claude-opus-4.6",
-          "copilot-claude-opus-4.5":   "claude-opus-4.5",
-          "copilot-gpt-5.4":           "gpt-5.4",
-          "copilot-gpt-5.3-codex":     "gpt-5.3-codex",
-          "copilot-gpt-5.2-codex":     "gpt-5.2-codex",
-          "copilot-gpt-5.2":           "gpt-5.2",
-          "copilot-gpt-5-mini":        "gpt-5-mini",
-          "copilot-gpt-4.1":           "gpt-4.1"
-        }
-      },
-      "env": {
-        "COPILOT_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/copilot-a"
-      },
-      "permission": "deny"
-    },
-
-    {
-      "_comment": "CODEX ACP (Zed) — ChatGPT OAuth (requires paid ChatGPT subscription). model_selection: SUPPORTED (configId=model, values: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.2). Pre-login: HOME=<dir>/codex-a npx @zed-industries/codex-acp@latest (first run triggers ChatGPT browser/device flow). Tokens persist via AuthManager in HOME/.codex/.",
-      "name": "codex",
-      "instance_id": "codex-a",
-      "command": "npx",
-      "args": ["-y", "@zed-industries/codex-acp@latest"],
-      "cwd": ".",
-      "models": ["codex-gpt-5.5", "codex-gpt-5.4", "codex-gpt-5.4-mini", "codex-gpt-5.3-codex", "codex-gpt-5.2"],
-      "model_selection": {
-        "type": "session_config",
-        "config_id": "model",
-        "values": {
-          "codex-gpt-5.5":       "gpt-5.5",
-          "codex-gpt-5.4":       "gpt-5.4",
-          "codex-gpt-5.4-mini":  "gpt-5.4-mini",
-          "codex-gpt-5.3-codex": "gpt-5.3-codex",
-          "codex-gpt-5.2":       "gpt-5.2"
-        }
-      },
-      "env": {
-        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/codex-a"
-      },
-      "permission": "deny"
-    },
-
-    {
-      "_comment": "OPENCODE — GitLab Duo OAuth. model_selection: SUPPORTED via session_config (auto-detected from session/new). opencode acp speaks JSON-RPC over stdio; the launched 'acp' subcommand does NOT take a --model flag. The proxy switches model per request via session/set_config_option. required=false lets the proxy fall back silently if a particular session does not expose the option. Pre-login: XDG_DATA_HOME=<dir>/opencode-a/.local/share opencode providers login (triggers GitLab OAuth). Tokens persist in XDG_DATA_HOME/opencode/auth.json as {\"gitlab\":{\"type\":\"oauth\",...}}.",
-      "name": "opencode-gitlab",
-      "instance_id": "opencode-gitlab-a",
-      "command": "npx",
-      "args": ["-y", "opencode-ai@latest", "acp"],
-      "cwd": ".",
-      "models": [
-        "gitlab/duo-chat-sonnet-4-6",
-        "gitlab/duo-chat-opus-4-7",
-        "gitlab/duo-chat-haiku-4-5",
-        "gitlab/duo-chat-gpt-5-codex"
-      ],
-      "model_selection": {
-        "type": "session_config",
-        "values": {
-          "gitlab/duo-chat-sonnet-4-6":  "gitlab/duo-chat-sonnet-4-6",
-          "gitlab/duo-chat-opus-4-7":    "gitlab/duo-chat-opus-4-7",
-          "gitlab/duo-chat-haiku-4-5":   "gitlab/duo-chat-haiku-4-5",
-          "gitlab/duo-chat-gpt-5-codex": "gitlab/duo-chat-gpt-5-codex"
+    "server": {
+        "host": "127.0.0.1",
+        "port": 11435,
+        "api_key": "123",
+        "logging": {
+            "level": "info",
+            "format": "text"
         },
-        "required": false
-      },
-      "env": {
-        "XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share",
-        "XDG_CONFIG_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.config"
-      },
-      "permission": "deny"
-    }
-  ]
+        "routing_strategy": "sticky_failover",
+        "max_retries": 3,
+        "failure_cooldown_seconds": 60
+    },
+    "agents": [
+        {
+            "_comment": "Codex with oauth",
+            "name": "codex",
+            "instance_id": "codex-a",
+            "command": "npx",
+            "args": ["-y", "@zed-industries/codex-acp@latest"],
+            "cwd": ".",
+            "models": ["gpt-5-mini"],
+            "model_selection": {
+                "type": "session_config",
+                "values": {
+                    "codex-gpt-5.5": "gpt-5.5/xhigh",
+                    "codex-gpt-5.4": "gpt-5.4/xhigh",
+                    "codex-gpt-5": "gpt-5.4-mini/xhigh",
+                    "codex-gpt-5.3-codex": "gpt-5.3-codex/xhigh",
+                    "codex-gpt-5.2": "gpt-5.2/xhigh"
+                },
+                "required": false
+            },
+            "env": {},
+            "permission": "deny",
+            "assume_authed": true
+        },
+        {
+            "_comment": "OPENCODE + Gitlab Duo oauth",
+            "name": "opencode",
+            "instance_id": "opencode-a",
+            "command": "npx",
+            "args": ["-y", "opencode-ai@latest", "acp"],
+            "cwd": ".",
+            "models": ["big-pickle", "gpt-5-mini"],
+            "model_selection": {
+                "type": "session_config",
+                "values": {
+                    "big-pickle": "opencode/big-pickle",
+                    "opencode/deepseek-v4-flash-free": "opencode/deepseek-v4-flash-free",
+                    "opencode/minimax-m2.5-free": "opencode/minimax-m2.5-free",
+                    "opencode/nemotron-3-super-free": "opencode/nemotron-3-super-free",
+                    "opencode/ring-2.6-1t-free": "opencode/ring-2.6-1t-free",
+                    "gitlab/duo-chat-gpt-5-1": "gitlab/duo-chat-gpt-5-1",
+                    "gitlab/duo-chat-gpt-5-2": "gitlab/duo-chat-gpt-5-2",
+                    "gitlab/duo-chat-gpt-5-2-codex": "gitlab/duo-chat-gpt-5-2-codex",
+                    "gitlab/duo-chat-gpt-5-3-codex": "gitlab/duo-chat-gpt-5-3-codex",
+                    "gitlab/duo-chat-gpt-5-4": "gitlab/duo-chat-gpt-5-4",
+                    "gitlab/duo-chat-gpt-5-4-mini": "gitlab/duo-chat-gpt-5-4-mini",
+                    "gitlab/duo-chat-gpt-5-4-nano": "gitlab/duo-chat-gpt-5-4-nano",
+                    "gitlab/duo-chat-gpt-5-codex": "gitlab/duo-chat-gpt-5-codex",
+                    "gpt-5-mini": "gitlab/duo-chat-gpt-5-mini",
+                    "gitlab/duo-chat-haiku-4-5": "gitlab/duo-chat-haiku-4-5",
+                    "gitlab/duo-chat-opus-4-5": "gitlab/duo-chat-opus-4-5",
+                    "gitlab/duo-chat-opus-4-6": "gitlab/duo-chat-opus-4-6",
+                    "gitlab/duo-chat-opus-4-7": "gitlab/duo-chat-opus-4-7",
+                    "gitlab/duo-chat-sonnet-4-5": "gitlab/duo-chat-sonnet-4-5",
+                    "gitlab/duo-chat-sonnet-4-6": "gitlab/duo-chat-sonnet-4-6"
+                },
+                "required": false
+            },
+            "env": {},
+            "permission": "deny",
+            "assume_authed": true
+        },
+        {
+            "name": "gemini",
+            "instance_id": "gemini-jn",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@google/gemini-cli@latest",
+                "--model",
+                "auto",
+                "--acp",
+                "--skip-trust"
+            ],
+            "models": ["gemini-pro", "gemini-flash", "gemini-flash-lite"],
+            "model_selection": {
+                "type": "gemini",
+                "values": {
+                    "gemini-pro": "gemini-3.1-pro-preview",
+                    "gemini-flash": "gemini-3-flash-preview",
+                    "gemini-flash-lite": "gemini-3.1-flash-lite-preview"
+                },
+                "required": true
+            },
+            "env": { "GEMINI_CLI_HOME": "/home/user/.gemini.userz" },
+            "permission": "deny",
+            "assume_authed": true
+        },
+        {
+            "name": "gemini",
+            "instance_id": "gemini-dv",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@google/gemini-cli@latest",
+                "--model",
+                "auto",
+                "--acp",
+                "--skip-trust"
+            ],
+            "models": ["gemini-pro", "gemini-flash", "gemini-flash-lite"],
+            "model_selection": {
+                "type": "gemini",
+                "values": {
+                    "gemini-pro": "gemini-3.1-pro-preview",
+                    "gemini-flash": "gemini-3-flash-preview",
+                    "gemini-flash-lite": "gemini-3.1-flash-lite-preview"
+                },
+                "required": true
+            },
+            "env": {
+                "GEMINI_CLI_HOME": "/home/user"
+            },
+            "permission": "deny",
+            "assume_authed": true
+        },
+        {
+            "name": "claude",
+            "instance_id": "claude-us",
+            "command": "npx",
+            "args": ["-y", "@agentclientprotocol/claude-agent-acp"],
+            "models": ["claude-haiku"],
+            "model_selection": {
+                "type": "session_config",
+                "values": {
+                    "claude-sonnet": "default",
+                    "claude-opus": "opus",
+                    "claude-opus[1m]": "opus[1m]",
+                    "claude-haiku": "haiku"
+                }
+            },
+            "permission": "deny",
+            "assume_authed": true
+        },
+        {
+            "name": "github",
+            "instance_id": "github-us",
+            "command": "npx",
+            "args": [
+                "--yes",
+                "--package",
+                "@github/copilot@latest",
+                "copilot",
+                "--acp",
+                "--stdio",
+                "--model",
+                "copilot-auto",
+                "--effort",
+                "high"
+            ],
+            "models": ["gpt-5-mini"],
+            "model_selection": {
+                "type": "session_config",
+
+                "values": {
+                    "copilot-auto": "auto",
+                    "copilot-claude-sonnet-4.6": "claude-sonnet-4.6",
+                    "copilot-claude-sonnet-4.5": "claude-sonnet-4.5",
+                    "copilot-claude-haiku-4.5": "claude-haiku-4.5",
+                    "copilot-claude-opus-4.7": "claude-opus-4.7",
+                    "copilot-claude-opus-4.6": "claude-opus-4.6",
+                    "copilot-claude-opus-4.5": "claude-opus-4.5",
+                    "copilot-gpt-5.4": "gpt-5.4",
+                    "copilot-gpt-5.3-codex": "gpt-5.3-codex",
+                    "copilot-gpt-5.2-codex": "gpt-5.2-codex",
+                    "copilot-gpt-5.2": "gpt-5.2",
+                    "gpt-5-mini": "gpt-5-mini",
+                    "copilot-gpt-4.1": "gpt-4.1"
+                }
+            },
+            "permission": "deny",
+            "assume_authed": true
+        }
+    ]
 }
