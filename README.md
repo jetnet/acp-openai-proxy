@@ -242,10 +242,10 @@ Some ACP agents expose session configuration options, including a model selector
 | --- | --- | --- | --- |
 | `type` | string | `"session_config"` | Must be `"session_config"`. Only supported type. |
 | `config_id` | string | auto-detect | ACP config option id to set. When omitted, the proxy auto-detects by looking for a config option with `category: "model"` or `id: "model"` in the agent's `session/new` response. |
-| `values` | object | `{}` | Maps OpenAI model ids to ACP config option values. Keys are the strings clients send as `model`, values are what gets passed to `session/set_config_option`. When a model id is not in this map, the proxy tries to match it against the agent's own option value list by `value` or `name`. |
-| `required` | boolean | `true` | Controls error behavior when model selection fails. See below. |
+| `values` | object | `{}` | Maps OpenAI model ids to upstream values. Keys are the strings clients send as `model`; values are what gets passed to `session/set_config_option` (standard ACP) or `session/set_model` as `modelId` (Gemini extension). When a model id is not in this map, the proxy tries to match it against the agent's own option/availableModels list by value, name, or `modelId`. |
+| `required` | boolean | `true` | Controls error behaviour when model selection fails. See ["What `required` does"](#what-required-does) below. |
 
-You can also set `model_selection: true` as shorthand for `{ "type": "session_config", "required": true }` with auto-detection and no explicit value mappings.
+You can also set `model_selection: true` as shorthand for `{ "type": "auto", "required": true }` with auto-detection and no explicit value mappings.
 
 ### How to know if an ACP agent supports model selection
 
@@ -276,15 +276,34 @@ The Google Gemini CLI uses the `models` extension shape rather than `configOptio
 
 The proxy will issue `session/set_model` with the mapped `modelId` before each prompt. Run the [model probe](scripts/) trick (`session/new` with no follow-up) to discover the actual `modelId` strings the CLI advertises.
 
-### Error behavior when model selection fails
+### What `required` does
 
-When `required` is `true` (the default), the proxy returns an error to the client if any of these happen:
+`required` decides what happens when the proxy cannot complete model selection for a request — either silently fall back to whatever model the CLI was launched with, or fail the request loudly.
 
-- The agent did not expose any matching ACP model config option.
-- The requested model string cannot be mapped to an ACP config value (not in `values` and not found in the agent's own option list).
-- The agent's config option does not list the mapped value as an allowed choice.
+There are four points where selection can fail:
 
-When `required` is `false`, the proxy silently skips model selection in all of the above cases and proceeds with whatever model the agent was launched with. The request still succeeds.
+| Failure | `required: true` | `required: false` |
+| --- | --- | --- |
+| Agent exposes neither `configOptions` nor `models.availableModels` | 502 `acp_error` to client | skip; send prompt as-is |
+| Your `values` map has no entry for the requested model id (and no automatic match from the agent's own option list) | 502 | skip |
+| The mapped value is not in the agent's allowed value list | 502 | skip |
+| Standard path: no `configId` resolvable | 502 | skip |
+
+In every "skip" case the proxy does **not** call `session/set_config_option` / `session/set_model`. The agent receives the prompt and answers using its CLI-launch default model (e.g. `--model auto` for the Gemini CLI).
+
+Practical recommendation:
+
+- **`required: true`** — when a model id maps to a *specific* upstream model and a broken mapping should fail loudly. Good for cost-control or compliance pinning.
+- **`required: false`** — when the `values` map is best-effort and an unmapped id should silently use the agent's default rather than 502. The trade-off is that `x-acp-model` in the response reflects only the OpenAI-style id the client sent, not the upstream model that actually answered.
+
+Concrete example with the Gemini agent and `required: false`:
+
+| Client requests `model: …` | What happens |
+| --- | --- |
+| `"gemini-flash-lite"` *(mapped)* | `session/set_model { modelId: "gemini-3.1-flash-lite-preview" }` → flash-lite answers |
+| `"some-unknown-model"` | no `set_model` call → agent answers using its launch default (`--model auto`) |
+
+With `required: true`, the second row would fail with `502 acp_error: agent ... cannot map requested model "some-unknown-model" to a Gemini availableModels entry`.
 
 ### When to use `model_selection` vs. separate agent blocks
 
