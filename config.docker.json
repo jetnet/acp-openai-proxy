@@ -1,0 +1,71 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 11435,
+    "api_key": "local-proxy-token",
+    "request_timeout_seconds": 3600,
+    "routing_strategy": "sticky_failover",
+    "max_retries": 1,
+    "max_attempts_per_request": 0,
+    "failure_cooldown_seconds": 60,
+    "retry_backoff_seconds": 0,
+    "retry_on_any_acp_error": false,
+    "affinity_prefix_chars": 4096
+  },
+  "agents": [
+    {
+      "name": "gemini",
+      "instance_id": "gemini-a",
+      "command": "gemini",
+      "args": ["--model", "auto", "--experimental-acp"],
+      "cwd": ".",
+      "models": ["gemini"],
+      "env": {
+        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}",
+        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-a",
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-a"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "gemini",
+      "instance_id": "gemini-b",
+      "command": "gemini",
+      "args": ["--model", "auto", "--experimental-acp"],
+      "cwd": ".",
+      "models": ["gemini"],
+      "env": {
+        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_B}",
+        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-b",
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-b"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "claude",
+      "instance_id": "claude-ka",
+      "command": "claude-agent-acp",
+      "args": [],
+      "cwd": ".",
+      "models": ["haiku"],
+      "env": {
+        "ANTHROPIC_MODEL": "haiku",
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/claude-ka"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "github-gpt-5-mini",
+      "instance_id": "github-gpt-5-mini-ka",
+      "command": "copilot",
+      "args": ["--acp", "--stdio", "--model", "gpt-5-mini", "--effort", "high"],
+      "cwd": ".",
+      "models": ["gpt-5-mini"],
+      "env": {
+        "COPILOT_MODEL": "gpt-5-mini",
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/github-gpt-5-mini-ka"
+      },
+      "permission": "deny"
+    }
+  ]
+}

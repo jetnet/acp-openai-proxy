@@ -1,0 +1,8 @@
+node_modules/
+npm-debug.log*
+coverage/
+.env
+*.local.json
+.DS_Store
+tmp
+.plan

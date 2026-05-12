@@ -1,0 +1,116 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 11435,
+    "api_key": "local-proxy-token",
+    "request_timeout_seconds": 3600,
+    "routing_strategy": "sticky_failover",
+    "max_retries": 1,
+    "max_attempts_per_request": 0,
+    "failure_cooldown_seconds": 60,
+    "retry_backoff_seconds": 0,
+    "retry_on_any_acp_error": false,
+    "affinity_prefix_chars": 4096
+  },
+  "agents": [
+    {
+      "name": "gemini",
+      "instance_id": "gemini-a",
+      "command": "npx",
+      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
+      "cwd": ".",
+      "models": ["gemini"],
+      "env": {
+        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}",
+        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-a"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "gemini",
+      "instance_id": "gemini-b",
+      "command": "npx",
+      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
+      "cwd": ".",
+      "models": ["gemini"],
+      "env": {
+        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_B}",
+        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-b"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "claude",
+      "instance_id": "claude-a",
+      "command": "npx",
+      "args": ["-y", "@agentclientprotocol/claude-agent-acp@latest"],
+      "cwd": ".",
+      "models": ["claude"],
+      "env": {
+        "ANTHROPIC_API_KEY": "{var:ANTHROPIC_API_KEY}",
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/claude-a"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "copilot",
+      "instance_id": "copilot-a",
+      "command": "npx",
+      "args": ["-y", "@github/copilot@latest", "--acp", "--stdio", "--model", "gpt-5.2"],
+      "cwd": ".",
+      "models": ["gpt-5.2"],
+      "env": {
+        "GH_TOKEN": "{var:GH_TOKEN}",
+        "COPILOT_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/copilot-a"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "codex",
+      "instance_id": "codex-a",
+      "command": "npx",
+      "args": ["-y", "@zed-industries/codex-acp@latest"],
+      "cwd": ".",
+      "models": ["codex-gpt-5.5", "codex-gpt-5.4", "codex-gpt-5.4-mini", "codex-gpt-5.3-codex", "codex-gpt-5.2"],
+      "model_selection": {
+        "type": "session_config",
+        "config_id": "model",
+        "values": {
+          "codex-gpt-5.5":       "gpt-5.5",
+          "codex-gpt-5.4":       "gpt-5.4",
+          "codex-gpt-5.4-mini":  "gpt-5.4-mini",
+          "codex-gpt-5.3-codex": "gpt-5.3-codex",
+          "codex-gpt-5.2":       "gpt-5.2"
+        }
+      },
+      "env": {
+        "OPENAI_API_KEY": "{var:OPENAI_API_KEY}",
+        "NO_BROWSER": "1",
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/codex-a"
+      },
+      "permission": "deny"
+    },
+    {
+      "name": "opencode",
+      "instance_id": "opencode-a",
+      "command": "npx",
+      "args": ["-y", "opencode-ai@latest", "acp"],
+      "cwd": ".",
+      "models": ["opencode/big-pickle", "opencode/deepseek-v4-flash-free"],
+      "model_selection": {
+        "type": "session_config",
+        "values": {
+          "opencode/big-pickle":             "opencode/big-pickle",
+          "opencode/deepseek-v4-flash-free": "opencode/deepseek-v4-flash-free"
+        },
+        "required": false
+      },
+      "env": {
+        "ANTHROPIC_API_KEY": "{var:ANTHROPIC_API_KEY}",
+        "XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share",
+        "XDG_CONFIG_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.config"
+      },
+      "permission": "deny"
+    }
+  ]
+}

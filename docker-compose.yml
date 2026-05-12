@@ -1,0 +1,24 @@
+services:
+  proxy:
+    build:
+      context: .
+    ports:
+      - "127.0.0.1:11435:11435"
+    environment:
+      AUTH_ROOT: /auth
+      GEMINI_API_KEY_A: ${GEMINI_API_KEY_A:?set GEMINI_API_KEY_A}
+      GEMINI_API_KEY_B: ${GEMINI_API_KEY_B:?set GEMINI_API_KEY_B}
+    volumes:
+      - auth:/auth
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+
+volumes:
+  auth:
