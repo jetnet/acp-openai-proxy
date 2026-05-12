@@ -400,4 +400,4 @@ npm run check
 npm test
 ```
 
-Current expected test result: 23 passing tests.
+Current expected test result: 27 passing tests.

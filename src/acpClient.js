@@ -139,7 +139,7 @@ export class AcpConnection {
     }
     async start() {
         if (this.running) return;
-        const env = { ...process.env, ...this.config.env };
+        const env = buildAgentEnv(this.config);
         this.logger.info?.("starting ACP agent", {
             agent: this.config.instanceId,
             command: this.config.command,
@@ -178,7 +178,19 @@ export class AcpConnection {
                 ),
             );
         });
-        await this.initialize();
+        try {
+            await this.initialize();
+        } catch (error) {
+            this.failAll(error);
+            const child = this.child;
+            this.child = null;
+            if (child && child.exitCode === null) {
+                try { child.stdin.end(); } catch {}
+                try { child.kill("SIGTERM"); } catch {}
+                setTimeout(() => { try { if (child.exitCode === null) child.kill("SIGKILL"); } catch {} }, 200).unref();
+            }
+            throw error;
+        }
     }
     async initialize() {
         const result = await this.request(
@@ -225,7 +237,16 @@ export class AcpConnection {
             );
             this.pending.set(id, { resolve, reject, timer });
         });
-        await this.write(payload);
+        try {
+            await this.write(payload);
+        } catch (writeError) {
+            const entry = this.pending.get(id);
+            if (entry) {
+                clearTimeout(entry.timer);
+                this.pending.delete(id);
+            }
+            throw writeError;
+        }
         return await promise;
     }
     async notify(method, params = undefined) {
@@ -842,36 +863,44 @@ function toolUpdateText(kind, update) {
     const status = update.status ? ` ${update.status}` : "";
     return `\n\n[${kind}] ${title}${status}\n\n`;
 }
-function permissionLooksReadOnly(params) {
-    const text = JSON.stringify(params ?? {}).toLowerCase();
-    const destructive = [
-        "write",
-        "delete",
-        "remove",
-        "rm ",
-        "rmdir",
-        "unlink",
-        "move",
-        "mv ",
-        "chmod",
-        "chown",
-        "execute",
-        "exec",
-        "shell",
-        "bash",
-        "terminal",
-        "spawn",
-        "create",
-        "patch",
-        "apply",
-        "install",
-        "npm ",
-        "pip ",
-        "curl ",
-        "wget ",
-    ];
-    return !destructive.some((marker) => text.includes(marker));
+const ACP_SAFE_KINDS = new Set(["read", "think", "fetch"]);
+const ACP_DESTRUCTIVE_KINDS = new Set(["edit", "delete", "move", "execute"]);
+const DESTRUCTIVE_RE = new RegExp(
+    String.raw`\b(write|delete|remove|rmdir|unlink|chmod|chown|exec(?:ute)?|shell|bash|terminal|spawn|patch|apply|install|push|rebase|sudo|kill|signal|download|format)\b` +
+        String.raw`|\bgit\s+(?:push|reset|rebase)\b` +
+        String.raw`|(?:^|[\s;&|])(?:rm|mv|cp|tee|dd|curl|wget|npm|pip|yarn|pnpm|cargo|gem|brew|apt)(?:\s|$)` +
+        String.raw`|[>]{1,2}\s*\S` +
+        String.raw`|\|\s*sh\b`,
+    "i",
+);
+
+export function permissionLooksReadOnly(params) {
+    const tc = params?.toolCall ?? params?.tool_call;
+    const kind = String(tc?.kind ?? "").toLowerCase();
+    if (ACP_DESTRUCTIVE_KINDS.has(kind)) return false;
+    if (ACP_SAFE_KINDS.has(kind)) return true;
+    const pieces = [tc?.title, tc?.toolCallId, tc?.tool_call_id];
+    if (tc?.content !== undefined) {
+        try { pieces.push(JSON.stringify(tc.content)); } catch { pieces.push(String(tc.content)); }
+    }
+    const text = pieces.filter(Boolean).join(" ");
+    if (!text) return false;
+    return !DESTRUCTIVE_RE.test(text);
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildAgentEnv(config) {
+    const allow = Array.isArray(config.envPassthrough) ? config.envPassthrough : [];
+    const env = {};
+    if (allow.length === 1 && allow[0] === "*") {
+        Object.assign(env, process.env);
+    } else {
+        for (const name of allow) {
+            if (process.env[name] !== undefined) env[name] = process.env[name];
+        }
+    }
+    Object.assign(env, config.env);
+    return env;
 }

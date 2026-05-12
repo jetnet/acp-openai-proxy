@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import readline from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
 const LABEL = process.env.ACP_FAKE_LABEL || process.env.FAKE_AGENT_LABEL || '';
 const FAIL_INITIALIZE = ['1', 'true', 'yes'].includes(String(process.env.ACP_FAKE_FAIL_INITIALIZE || '').toLowerCase());
@@ -7,8 +8,11 @@ const FAIL_PROMPT = String(process.env.ACP_FAKE_FAIL_PROMPT || '').toLowerCase()
 const NO_IMAGE = ['1', 'true', 'yes'].includes(String(process.env.ACP_FAKE_NO_IMAGE || '').toLowerCase());
 const MODEL_OPTIONS = String(process.env.ACP_FAKE_MODEL_OPTIONS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const TOOL_CALL = String(process.env.ACP_FAKE_TOOL_CALL || '');
+const SLOW_STREAM_MS = Number(process.env.ACP_FAKE_SLOW_STREAM_MS || 0);
+const CANCEL_LOG = process.env.ACP_FAKE_CANCEL_LOG || '';
 let sessionCounter = 0;
 const sessions = new Map();
+const cancellers = new Map();
 
 function send(obj) { process.stdout.write(`${JSON.stringify(obj)}\n`); }
 function result(req, value) { send({ jsonrpc: '2.0', id: req.id, result: value }); }
@@ -82,6 +86,19 @@ rl.on('line', async (line) => {
     if (FAIL_PROMPT === 'exit') process.exit(23);
     const sessionId = msg.params?.sessionId;
     const prompt = textFromBlocks(msg.params?.prompt);
+    if (SLOW_STREAM_MS > 0) {
+      let cancelled = false;
+      cancellers.set(sessionId, () => { cancelled = true; });
+      let i = 0;
+      while (!cancelled && i < 60) {
+        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `slow-chunk-${i} ` } } } });
+        await new Promise((resolve) => setTimeout(resolve, SLOW_STREAM_MS));
+        i += 1;
+      }
+      cancellers.delete(sessionId);
+      result(msg, { stopReason: cancelled ? 'cancelled' : 'end_turn', usage: { input_tokens: 1, output_tokens: i, total_tokens: 1 + i } });
+      return;
+    }
     if (TOOL_CALL) {
       const splitAt = TOOL_CALL.indexOf(':');
       const name = splitAt < 0 ? TOOL_CALL : TOOL_CALL.slice(0, splitAt);
@@ -94,7 +111,9 @@ rl.on('line', async (line) => {
     }
     const selectedModel = sessions.get(sessionId)?.model;
     const bits = [LABEL, selectedModel].filter(Boolean).join('/');
-    const prefix = bits ? `Echo[${bits}]: ` : 'Echo: ';
+    const leak = process.env.ACP_FAKE_LEAK_TEST;
+    const leakTag = leak ? `(LEAK:${leak})` : '';
+    const prefix = bits ? `Echo[${bits}]${leakTag}: ` : `Echo${leakTag}: `;
     for (const [index, chunk] of [prefix, prompt].entries()) {
       send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } } } });
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -108,7 +127,10 @@ rl.on('line', async (line) => {
     sessions.delete(msg.params?.sessionId);
     result(msg, {});
   } else if (msg.method === 'session/cancel') {
-    // Notification: no response.
+    const sid = msg.params?.sessionId;
+    if (CANCEL_LOG) { try { appendFileSync(CANCEL_LOG, `${sid ?? '?'}\n`); } catch {} }
+    const cb = cancellers.get(sid);
+    if (cb) cb();
   } else {
     error(msg, `no such method: ${msg.method}`, -32601);
   }

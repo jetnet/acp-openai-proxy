@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { AcpOpenAiServer } from '../src/server.js';
 import { normalizeConfig } from '../src/config.js';
 import { createLogger } from '../src/logger.js';
+import { permissionLooksReadOnly } from '../src/acpClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT = path.resolve(__dirname, '..');
@@ -413,6 +416,92 @@ test('bearer auth accepts lowercase scheme and rejects mismatched length', async
     const wrong2 = await fetch(`${baseUrl}/v1/models`, { headers: { authorization: 'Bearer wrongkey' } });
     assert.equal(wrong2.status, 401);
   });
+});
+
+test('permissionLooksReadOnly uses ACP kind directly and tightens fallback regex', () => {
+  // ACP-spec kinds win regardless of title content.
+  assert.equal(permissionLooksReadOnly({ toolCall: { kind: 'read', title: 'read_file' } }), true);
+  assert.equal(permissionLooksReadOnly({ toolCall: { kind: 'fetch', title: 'http_get' } }), true);
+  assert.equal(permissionLooksReadOnly({ toolCall: { kind: 'execute', title: 'echo hi' } }), false);
+  assert.equal(permissionLooksReadOnly({ toolCall: { kind: 'delete', title: 'rm note' } }), false);
+  // No kind: fall back to word-boundary regex. Tighter than the previous substring match.
+  assert.equal(permissionLooksReadOnly({ toolCall: { title: 'search_excerpt' } }), true, 'search_excerpt no longer false-blocks on exec substring');
+  assert.equal(permissionLooksReadOnly({ toolCall: { title: 'git push origin main' } }), false);
+  assert.equal(permissionLooksReadOnly({ toolCall: { title: 'cat foo > bar.txt' } }), false);
+  assert.equal(permissionLooksReadOnly({ toolCall: { title: 'npm install something' } }), false);
+  // Empty / unstructured params: deny by default.
+  assert.equal(permissionLooksReadOnly({}), false);
+});
+
+test('env_passthrough default does not leak unrelated parent env to agent', async () => {
+  const original = process.env.ACP_FAKE_LEAK_TEST;
+  process.env.ACP_FAKE_LEAK_TEST = 'leaky-secret-abc';
+  try {
+    await withApp({
+      server: { ...baseServer },
+      agents: [agent('gemini', 'a')]
+    }, async ({ baseUrl }) => {
+      const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hi' }] });
+      assert.equal(r.status, 200);
+      const body = await r.json();
+      assert.doesNotMatch(body.choices[0].message.content, /leaky-secret-abc/, 'agent should not see ACP_FAKE_LEAK_TEST');
+    });
+  } finally {
+    if (original === undefined) delete process.env.ACP_FAKE_LEAK_TEST;
+    else process.env.ACP_FAKE_LEAK_TEST = original;
+  }
+});
+
+test('env_passthrough wildcard inherits all parent env to agent', async () => {
+  const original = process.env.ACP_FAKE_LEAK_TEST;
+  process.env.ACP_FAKE_LEAK_TEST = 'inherited-xyz';
+  try {
+    await withApp({
+      server: { ...baseServer, env_passthrough: ['*'] },
+      agents: [agent('gemini', 'a')]
+    }, async ({ baseUrl }) => {
+      const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hi' }] });
+      assert.equal(r.status, 200);
+      const body = await r.json();
+      assert.match(body.choices[0].message.content, /inherited-xyz/, 'agent should see the parent env when wildcard is set');
+    });
+  } finally {
+    if (original === undefined) delete process.env.ACP_FAKE_LEAK_TEST;
+    else process.env.ACP_FAKE_LEAK_TEST = original;
+  }
+});
+
+test('client abort during streaming propagates session/cancel to the agent', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'acp-cancel-'));
+  const cancelLog = path.join(dir, 'cancels.log');
+  writeFileSync(cancelLog, '');
+  const app = new AcpOpenAiServer(config({
+    server: { ...baseServer },
+    agents: [agent('gemini', 'a', { ACP_FAKE_SLOW_STREAM_MS: '60', ACP_FAKE_CANCEL_LOG: cancelLog })]
+  }), { logger: createLogger({ level: 'silent' }) });
+  await app.startAtBoot();
+  const address = await app.listen();
+  const baseUrl = `http://${address.address}:${address.port}`;
+  try {
+    const ctrl = new AbortController();
+    const r = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+      body: JSON.stringify({ model: 'gemini', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+      signal: ctrl.signal
+    });
+    const reader = r.body.getReader();
+    const { value } = await reader.read();
+    assert.ok(value && value.length > 0, 'expected at least one SSE chunk before abort');
+    ctrl.abort();
+    try { await reader.cancel(); } catch {}
+    // Allow cancel notification to propagate through ACP.
+    await new Promise((r) => setTimeout(r, 500));
+    const observed = readFileSync(cancelLog, 'utf8').trim();
+    assert.ok(observed.length > 0, `fake agent should have observed session/cancel; log was empty`);
+  } finally {
+    await app.close();
+  }
 });
 
 test('/v1/responses non-streaming with multimodal data URI image', async () => {

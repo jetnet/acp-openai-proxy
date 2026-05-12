@@ -16,6 +16,13 @@ export function openAiError(message, type = 'server_error', status = 500, code =
 }
 
 export async function readJsonBody(req, maxBytes = 64 * 1024 * 1024) {
+  const declared = Number(req.headers?.['content-length']);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    const err = new Error(`request body exceeds max_request_bytes (${declared} > ${maxBytes})`);
+    err.status = 413;
+    err.type = 'invalid_request_error';
+    throw err;
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {

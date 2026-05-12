@@ -41,6 +41,8 @@ export function createProxyServer(config, { logger = createLogger() } = {}) {
     logRequest(manager.logger, req, res);
     handleRequest(manager, req, res).catch((error) => sendCaughtError(manager, res, error));
   });
+  server.headersTimeout = config.server.requestHeaderTimeoutSeconds * 1000;
+  server.keepAliveTimeout = config.server.keepAliveTimeoutSeconds * 1000;
   server.manager = manager;
   server.startBootAgents = () => manager.startBootAgents();
   server.closeProxy = async () => {
@@ -196,10 +198,10 @@ async function handleChat(manager, req, res) {
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'chat');
   validateRequest(body, 'chat');
-  const result = await runWithFailover(manager, pool, req, body, async (runtime) => {
+  const result = await runWithFailover(manager, pool, req, res, body, async (runtime, signal) => {
     await runtime.ensureStarted();
     const promptBlocks = buildChatPrompt(body, runtime.connection.capabilities);
-    const collected = await collectRuntime(runtime, promptBlocks, model);
+    const collected = await collectRuntime(runtime, promptBlocks, model, signal);
     return { runtime, promptBlocks, ...collected };
   });
   const toolCalls = extractClientToolCalls(result.text, body);
@@ -215,10 +217,10 @@ async function handleCompletion(manager, req, res) {
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'completion');
   validateRequest(body, 'completion');
-  const result = await runWithFailover(manager, pool, req, body, async (runtime) => {
+  const result = await runWithFailover(manager, pool, req, res, body, async (runtime, signal) => {
     await runtime.ensureStarted();
     const promptBlocks = buildCompletionPrompt(body);
-    const collected = await collectRuntime(runtime, promptBlocks, model);
+    const collected = await collectRuntime(runtime, promptBlocks, model, signal);
     return { runtime, promptBlocks, ...collected };
   });
   jsonResponse(res, 200, completionResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage), {
@@ -233,10 +235,10 @@ async function handleResponses(manager, req, res) {
   const pool = manager.pool(model);
   if (body.stream) return streamEndpoint(manager, pool, req, res, body, model, 'responses');
   validateRequest(body, 'responses');
-  const result = await runWithFailover(manager, pool, req, body, async (runtime) => {
+  const result = await runWithFailover(manager, pool, req, res, body, async (runtime, signal) => {
     await runtime.ensureStarted();
     const promptBlocks = buildResponsesPrompt(body, runtime.connection.capabilities);
-    const collected = await collectRuntime(runtime, promptBlocks, model);
+    const collected = await collectRuntime(runtime, promptBlocks, model, signal);
     return { runtime, promptBlocks, ...collected };
   });
   jsonResponse(res, 200, responsesApiResponse(model, result.promptBlocks, result.text, result.stopReason, result.usage), {
@@ -245,13 +247,16 @@ async function handleResponses(manager, req, res) {
   });
 }
 
-async function runWithFailover(manager, pool, req, body, operation) {
+async function runWithFailover(manager, pool, req, res, body, operation) {
   const attempts = pool.attemptOrder(routingKeyFromRequest(req, body, pool.affinityPrefixChars));
+  const abort = clientAbortController(req, res);
   const failures = [];
   for (const runtime of attempts) {
+    if (abort.signal.aborted) throw new ClientAbortError('client closed the connection');
     try {
-      return await operation(runtime);
+      return await operation(runtime, abort.signal);
     } catch (error) {
+      if (abort.signal.aborted) throw new ClientAbortError('client closed the connection');
       runtime.markFailure(error, manager.config.server.failureCooldownSeconds);
       manager.logger.warn('runtime attempt failed', { agent: runtime.runtimeId, model: pool.model, error });
       failures.push({ runtimeId: runtime.runtimeId, message: compactError(error), error });
@@ -264,6 +269,8 @@ async function runWithFailover(manager, pool, req, body, operation) {
   throw new AcpError(formatRouteFailures(pool.model, failures));
 }
 
+class ClientAbortError extends Error { constructor(message) { super(message); this.name = 'ClientAbortError'; this.status = 499; this.type = 'client_closed_request'; } }
+
 async function streamEndpoint(manager, pool, req, res, body, model, kind) {
   validateRequest(body, kind);
   const attempts = pool.attemptOrder(routingKeyFromRequest(req, body, pool.affinityPrefixChars));
@@ -272,48 +279,51 @@ async function streamEndpoint(manager, pool, req, res, body, model, kind) {
   const bufferChatToolCalls = kind === 'chat' && clientToolContext(body).enabled;
   const responseId = kind === 'chat' ? makeId('chatcmpl') : kind === 'completion' ? makeId('cmpl') : makeId('resp');
   const created = now();
-  const abort = new AbortController();
-  req.on('aborted', () => abort.abort());
+  const abort = clientAbortController(req, res);
   let headersSent = false;
   let emitted = false;
   for (const runtime of attempts) {
+    if (abort.signal.aborted) return;
     try {
       await runtime.ensureStarted();
       const promptBlocks = kind === 'chat' ? buildChatPrompt(body, runtime.connection.capabilities) : kind === 'completion' ? buildCompletionPrompt(body) : buildResponsesPrompt(body, runtime.connection.capabilities);
       if (!headersSent) {
         startSse(res, { 'x-acp-agent': runtime.runtimeId, 'x-acp-model': model });
         headersSent = true;
-        if (kind === 'responses') res.write(sseData({ type: 'response.created', response: { id: responseId, object: 'response', created_at: created, status: 'in_progress', model } }));
+        if (kind === 'responses') await writeSse(res, sseData({ type: 'response.created', response: { id: responseId, object: 'response', created_at: created, status: 'in_progress', model } }));
       }
       let text = '';
       let usage = null;
       for await (const event of runtime.streamPrompt(promptBlocks, abort.signal, { model })) {
+        if (abort.signal.aborted || !sseWritable(res)) break;
         if (event.kind === 'chunk' || event.kind === 'tool') {
           emitted = true;
           text += event.text || '';
-          if (!bufferChatToolCalls) writeStreamDelta(res, kind, responseId, model, created, event.text || '');
+          if (!bufferChatToolCalls) await writeStreamDelta(res, kind, responseId, model, created, event.text || '');
         } else if (event.kind === 'usage') {
           usage = event.usage;
         } else if (event.kind === 'done') {
-          writeBufferedChatToolResult(res, kind, bufferChatToolCalls, responseId, model, created, body, promptBlocks, text, event.stopReason, includeUsage ? usage : null);
-          res.write(doneSse());
-          res.end();
+          await writeBufferedChatToolResult(res, kind, bufferChatToolCalls, responseId, model, created, body, promptBlocks, text, event.stopReason, includeUsage ? usage : null);
+          if (sseWritable(res)) { await writeSse(res, doneSse()); res.end(); }
           return;
         }
       }
-      writeBufferedChatToolResult(res, kind, bufferChatToolCalls, responseId, model, created, body, promptBlocks, text, 'end_turn', includeUsage ? usage : null);
-      res.write(doneSse());
-      res.end();
+      if (abort.signal.aborted) return;
+      await writeBufferedChatToolResult(res, kind, bufferChatToolCalls, responseId, model, created, body, promptBlocks, text, 'end_turn', includeUsage ? usage : null);
+      if (sseWritable(res)) { await writeSse(res, doneSse()); res.end(); }
       return;
     } catch (error) {
+      if (abort.signal.aborted) return;
       runtime.markFailure(error, manager.config.server.failureCooldownSeconds);
       manager.logger.warn('stream runtime attempt failed', { agent: runtime.runtimeId, model, error });
       failures.push({ runtimeId: runtime.runtimeId, message: compactError(error), error });
       if (emitted || error instanceof AgentCapabilityError || !isRetryableError(error, pool)) {
         if (!headersSent) return sendCaughtError(manager, res, error);
-        res.write(sseEvent('error', { error: { message: compactError(error), type: 'acp_error', code: null } }));
-        res.write(doneSse());
-        res.end();
+        if (sseWritable(res)) {
+          await writeSse(res, sseEvent('error', { error: { message: compactError(error), type: 'acp_error', code: null } }));
+          await writeSse(res, doneSse());
+          res.end();
+        }
         return;
       }
       await maybeRetryBackoff(pool);
@@ -321,16 +331,19 @@ async function streamEndpoint(manager, pool, req, res, body, model, kind) {
   }
   const error = allCandidateSpecificFailures(failures) ? badRequest(formatCapabilityFailures(pool.model, failures)) : new AcpError(formatRouteFailures(pool.model, failures));
   if (!headersSent) return sendCaughtError(manager, res, error);
-  res.write(sseEvent('error', { error: { message: compactError(error), type: 'acp_error', code: null } }));
-  res.write(doneSse());
-  res.end();
+  if (sseWritable(res)) {
+    await writeSse(res, sseEvent('error', { error: { message: compactError(error), type: 'acp_error', code: null } }));
+    await writeSse(res, doneSse());
+    res.end();
+  }
 }
 
-async function collectRuntime(runtime, promptBlocks, model) {
+async function collectRuntime(runtime, promptBlocks, model, signal = undefined) {
   let text = '';
   let stopReason = 'end_turn';
   let usage = null;
-  for await (const event of runtime.streamPrompt(promptBlocks, undefined, { model })) {
+  for await (const event of runtime.streamPrompt(promptBlocks, signal, { model })) {
+    if (signal?.aborted) break;
     if (event.kind === 'chunk' || event.kind === 'tool') text += event.text || '';
     else if (event.kind === 'usage') usage = event.usage;
     else if (event.kind === 'done') stopReason = event.stopReason || 'end_turn';
@@ -338,29 +351,29 @@ async function collectRuntime(runtime, promptBlocks, model) {
   return { text, stopReason, usage };
 }
 
-function writeStreamDelta(res, kind, id, model, created, deltaText) {
+async function writeStreamDelta(res, kind, id, model, created, deltaText) {
   if (kind === 'completion') {
-    res.write(sseData({ id, object: 'text_completion', created, model, choices: [{ index: 0, text: deltaText, logprobs: null, finish_reason: null }] }));
+    await writeSse(res, sseData({ id, object: 'text_completion', created, model, choices: [{ index: 0, text: deltaText, logprobs: null, finish_reason: null }] }));
   } else if (kind === 'responses') {
-    res.write(sseData({ type: 'response.output_text.delta', response_id: id, output_index: 0, content_index: 0, delta: deltaText }));
+    await writeSse(res, sseData({ type: 'response.output_text.delta', response_id: id, output_index: 0, content_index: 0, delta: deltaText }));
   } else {
-    res.write(sseData({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { content: deltaText }, finish_reason: null }] }));
+    await writeSse(res, sseData({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: { content: deltaText }, finish_reason: null }] }));
   }
 }
 
-function writeBufferedChatToolResult(res, kind, buffered, id, model, created, body, promptBlocks, text, stopReason, usageOverride) {
+async function writeBufferedChatToolResult(res, kind, buffered, id, model, created, body, promptBlocks, text, stopReason, usageOverride) {
   if (!buffered) return writeStreamFinal(res, kind, id, model, created, promptBlocks, text, stopReason, usageOverride);
   const toolCalls = extractClientToolCalls(text, body);
   if (toolCalls.length) {
-    writeStreamToolCalls(res, id, model, created, toolCalls);
+    await writeStreamToolCalls(res, id, model, created, toolCalls);
     return writeStreamFinal(res, 'chat', id, model, created, promptBlocks, text, 'tool_calls', usageOverride);
   }
-  if (text) writeStreamDelta(res, 'chat', id, model, created, text);
+  if (text) await writeStreamDelta(res, 'chat', id, model, created, text);
   return writeStreamFinal(res, 'chat', id, model, created, promptBlocks, text, stopReason, usageOverride);
 }
 
-function writeStreamToolCalls(res, id, model, created, toolCalls) {
-  res.write(sseData({
+async function writeStreamToolCalls(res, id, model, created, toolCalls) {
+  await writeSse(res, sseData({
     id,
     object: 'chat.completion.chunk',
     created,
@@ -373,18 +386,18 @@ function writeStreamToolCalls(res, id, model, created, toolCalls) {
   }));
 }
 
-function writeStreamFinal(res, kind, id, model, created, promptBlocks, text, stopReason, usageOverride) {
+async function writeStreamFinal(res, kind, id, model, created, promptBlocks, text, stopReason, usageOverride) {
   if (kind === 'completion') {
-    res.write(sseData({ id, object: 'text_completion', created, model, choices: [{ index: 0, text: '', logprobs: null, finish_reason: finishReason(stopReason) }] }));
-    if (usageOverride) res.write(sseData({ id, object: 'text_completion', created, model, choices: [], usage: responseUsage(promptBlocks, text, usageOverride) }));
+    await writeSse(res, sseData({ id, object: 'text_completion', created, model, choices: [{ index: 0, text: '', logprobs: null, finish_reason: finishReason(stopReason) }] }));
+    if (usageOverride) await writeSse(res, sseData({ id, object: 'text_completion', created, model, choices: [], usage: responseUsage(promptBlocks, text, usageOverride) }));
   } else if (kind === 'responses') {
     const response = responsesApiResponse(model, promptBlocks, text, stopReason, usageOverride);
     response.id = id;
     response.created_at = created;
-    res.write(sseData({ type: 'response.completed', response }));
+    await writeSse(res, sseData({ type: 'response.completed', response }));
   } else {
-    res.write(sseData({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: finishReason(stopReason) }] }));
-    if (usageOverride) res.write(sseData({ id, object: 'chat.completion.chunk', created, model, choices: [], usage: responseUsage(promptBlocks, text, usageOverride) }));
+    await writeSse(res, sseData({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta: {}, finish_reason: finishReason(stopReason) }] }));
+    if (usageOverride) await writeSse(res, sseData({ id, object: 'chat.completion.chunk', created, model, choices: [], usage: responseUsage(promptBlocks, text, usageOverride) }));
   }
 }
 
@@ -395,9 +408,33 @@ function startSse(res, headers = {}) {
     connection: 'keep-alive',
     ...headers
   });
+  res.flushHeaders();
+}
+
+function clientAbortController(req, res) {
+  const abort = new AbortController();
+  const onAbort = () => { if (!res.writableEnded) abort.abort(); };
+  res.on('close', onAbort);
+  req.on('close', onAbort);
+  return abort;
+}
+
+function sseWritable(res) {
+  return !res.writableEnded && !res.destroyed;
+}
+
+async function writeSse(res, chunk) {
+  if (!sseWritable(res)) return false;
+  if (res.write(chunk)) return true;
+  await new Promise((resolve) => res.once('drain', resolve));
+  return sseWritable(res);
 }
 
 function sendCaughtError(manager, res, error) {
+  if (error instanceof ClientAbortError) {
+    if (!res.writableEnded) res.end();
+    return;
+  }
   const status = error.status || (error instanceof BadRequest ? 400 : 502);
   const type = error.type || (status === 400 ? 'invalid_request_error' : 'acp_error');
   manager.logger[status >= 500 ? 'error' : 'warn']('request failed', { status, type, error });

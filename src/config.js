@@ -71,10 +71,12 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
     return fallback;
   };
   const logging = normalizeLogging(l);
+  const defaultPassthrough = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR'];
   const server = {
     host: nonEmptyString(s.host ?? raw.host ?? '127.0.0.1', 'server.host'),
     port: intRange(s.port ?? raw.port ?? 11435, 'server.port', { min: 0, max: 65535 }),
     apiKey: normalizeApiKey(s.api_key ?? s.apiKey ?? raw.api_key ?? raw.apiKey),
+    envPassthrough: strList(s.env_passthrough ?? s.envPassthrough ?? raw.env_passthrough ?? defaultPassthrough, 'server.env_passthrough'),
     requestTimeoutSeconds: numRange(s.request_timeout_seconds ?? s.requestTimeoutSeconds ?? raw.request_timeout_seconds ?? raw.requestTimeoutSeconds ?? 3600, 'server.request_timeout_seconds', { min: 1, max: 86400 }),
     routingStrategy: normalizeRoutingStrategy(pick('strategy', ['routing_strategy', 'routingStrategy', 'routing_policy', 'routingPolicy'], 'sticky_failover')),
     maxRetries: intRange(pick('max_retries', ['maxRetries', 'retries'], 1), 'server.max_retries', { min: 1, max: 100 }),
@@ -83,7 +85,9 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
     retryBackoffSeconds: numRange(pick('retry_backoff_seconds', ['retryBackoffSeconds', 'backoff_seconds', 'backoffSeconds'], 0), 'server.retry_backoff_seconds', { min: 0, max: 3600 }),
     retryOnAnyAcpError: asBool(pick('retry_on_any_acp_error', ['retryOnAnyAcpError', 'retry_all_acp_errors', 'retryAllAcpErrors'], false)),
     affinityPrefixChars: intRange(pick('affinity_prefix_chars', ['affinityPrefixChars', 'routing_key_prefix_chars', 'routingKeyPrefixChars', 'prompt_affinity_prefix_chars', 'promptAffinityPrefixChars'], 4096), 'server.affinity_prefix_chars', { min: 128, max: 1048576 }),
-    maxRequestBytes: intRange(s.max_request_bytes ?? s.maxRequestBytes ?? raw.max_request_bytes ?? 64 * 1024 * 1024, 'server.max_request_bytes', { min: 1024, max: 1024 * 1024 * 1024 })
+    maxRequestBytes: intRange(s.max_request_bytes ?? s.maxRequestBytes ?? raw.max_request_bytes ?? 64 * 1024 * 1024, 'server.max_request_bytes', { min: 1024, max: 1024 * 1024 * 1024 }),
+    requestHeaderTimeoutSeconds: numRange(s.request_header_timeout_seconds ?? s.requestHeaderTimeoutSeconds ?? raw.request_header_timeout_seconds ?? 15, 'server.request_header_timeout_seconds', { min: 1, max: 300 }),
+    keepAliveTimeoutSeconds: numRange(s.keep_alive_timeout_seconds ?? s.keepAliveTimeoutSeconds ?? raw.keep_alive_timeout_seconds ?? 5, 'server.keep_alive_timeout_seconds', { min: 0, max: 300 })
   };
   if (!['sticky_failover', 'primary_failover', 'round_robin', 'least_busy'].includes(server.routingStrategy)) {
     throw new Error('routing_strategy must be sticky_failover, primary_failover, round_robin, or least_busy');
@@ -120,7 +124,8 @@ export function normalizeConfig(raw, configDir = process.cwd()) {
       exposeToolUpdates: asBool(item.expose_tool_updates ?? item.exposeToolUpdates ?? item.show_tool_updates ?? item.showToolUpdates, false),
       startAtBoot: asBool(item.start_at_boot ?? item.startAtBoot ?? item.start_on_boot ?? item.startOnBoot, false),
       startupTimeoutSeconds: numRange(item.startup_timeout_seconds ?? item.startupTimeoutSeconds ?? item.startup_timeout ?? item.startupTimeout ?? 30, `agent ${name}.startup_timeout_seconds`, { min: 1, max: 3600 }),
-      requestTimeoutSeconds: numRange(item.request_timeout_seconds ?? item.requestTimeoutSeconds ?? server.requestTimeoutSeconds, `agent ${name}.request_timeout_seconds`, { min: 1, max: 86400 })
+      requestTimeoutSeconds: numRange(item.request_timeout_seconds ?? item.requestTimeoutSeconds ?? server.requestTimeoutSeconds, `agent ${name}.request_timeout_seconds`, { min: 1, max: 86400 }),
+      envPassthrough: item.env_passthrough !== undefined || item.envPassthrough !== undefined ? strList(item.env_passthrough ?? item.envPassthrough ?? [], `agent ${name}.env_passthrough`) : server.envPassthrough
     };
     if (!agent.command) throw new Error(`agent ${name} command must not be empty`);
     return agent;
