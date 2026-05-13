@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export function defaultConfigText() {
@@ -213,6 +214,39 @@ function strDict(v, field, { expand = true } = {}) {
   return out;
 }
 export function expandEnv(s) {
+  const fileValues = [];
+  const withFilePlaceholders = expandSecretFiles(s, fileValues);
+  const expanded = expandEnvOnly(withFilePlaceholders);
+  return restoreSecretFiles(expanded, fileValues);
+}
+function expandSecretFiles(s, fileValues) {
+  return s.replace(/\{file:([^}]+)\}/g, (match, rawPath) => {
+    const resolvedPath = resolveSecretFilePath(rawPath);
+    if (resolvedPath === null) return match;
+    let content;
+    try {
+      content = fs.readFileSync(resolvedPath, 'utf8').replace(/\r?\n$/, '');
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(`Cannot read secret file '${resolvedPath}' (from ${match}): ${message}`);
+    }
+    const index = fileValues.push(content) - 1;
+    return `\0ACP_FILE_${index}\0`;
+  });
+}
+function restoreSecretFiles(s, fileValues) {
+  return s.replace(/\0ACP_FILE_(\d+)\0/g, (match, index) => fileValues[Number(index)] ?? match);
+}
+function resolveSecretFilePath(filePath) {
+  let resolved = filePath.trim();
+  if (resolved === '~' || resolved.startsWith('~/')) {
+    resolved = path.join(os.homedir(), resolved.slice(2));
+  }
+  resolved = resolved.replace(/%([^%]+)%/g, (match, name) => process.env[name] ?? match);
+  if (path.posix.isAbsolute(resolved) || path.win32.isAbsolute(resolved)) return resolved;
+  return null;
+}
+function expandEnvOnly(s) {
   const expand = (name, op, arg) => {
     const value = process.env[name];
     if (value !== undefined && value !== '') return value;
@@ -275,8 +309,7 @@ function isLoopbackHost(host) {
 function normalizeApiKey(value) {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') throw new Error('server.api_key must be a string');
-  if (value === '') throw new Error('server.api_key is set but empty; remove the field to disable auth or set a real value');
-  return value;
+  const expanded = expandEnv(value);
+  if (expanded === '') throw new Error('server.api_key is set but empty; remove the field to disable auth or set a real value');
+  return expanded;
 }
-
-

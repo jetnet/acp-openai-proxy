@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { AcpOpenAiServer } from '../src/server.js';
-import { normalizeConfig } from '../src/config.js';
+import { expandEnv, normalizeConfig } from '../src/config.js';
 import { createLogger } from '../src/logger.js';
 import { permissionLooksReadOnly } from '../src/acpClient.js';
 
@@ -132,6 +132,60 @@ test('agent env supports {var:NAME} expansion and rejects removed env_sections',
   } finally {
     if (old === undefined) delete process.env.ACP_PROXY_TEST_SECRET;
     else process.env.ACP_PROXY_TEST_SECRET = old;
+  }
+});
+
+test('config supports {file:...} expansion for secrets', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'acp-file-ref-'));
+  const secretFile = path.join(dir, 'secret.txt');
+  const crlfFile = path.join(dir, 'crlf.txt');
+  const percentFile = path.join(dir, 'percent.txt');
+  const literalFile = path.join(dir, 'literal.txt');
+  const apiKeyFile = path.join(dir, 'api-key.txt');
+  writeFileSync(secretFile, 'file-secret\n');
+  writeFileSync(crlfFile, 'crlf-secret\r\n');
+  writeFileSync(percentFile, 'percent-secret');
+  writeFileSync(literalFile, 'literal-$ACP_PROXY_SHOULD_NOT_EXPAND-{env:ACP_PROXY_SHOULD_NOT_EXPAND}\n');
+  writeFileSync(apiKeyFile, 'api-secret\n');
+
+  const previousDir = process.env.ACP_PROXY_FILE_DIR;
+  const previousHome = process.env.HOME;
+  const previousRef = process.env.ACP_PROXY_FILE_REF;
+  const previousLiteral = process.env.ACP_PROXY_SHOULD_NOT_EXPAND;
+  try {
+    process.env.ACP_PROXY_FILE_DIR = dir;
+    process.env.HOME = dir;
+    process.env.ACP_PROXY_FILE_REF = secretFile;
+    process.env.ACP_PROXY_SHOULD_NOT_EXPAND = 'expanded';
+
+    assert.equal(expandEnv(`Bearer {file:${secretFile}}`), 'Bearer file-secret');
+    assert.equal(expandEnv(`{file:${secretFile}}:{file:${crlfFile}}`), 'file-secret:crlf-secret');
+    assert.equal(expandEnv('{file:~/secret.txt}'), 'file-secret');
+    assert.equal(expandEnv('{file:%ACP_PROXY_FILE_DIR%/percent.txt}'), 'percent-secret');
+    assert.equal(expandEnv('{file:relative-secret.txt}'), '{file:relative-secret.txt}');
+    assert.equal(expandEnv('{file:%ACP_PROXY_UNSET_FILE_DIR%/secret.txt}'), '{file:%ACP_PROXY_UNSET_FILE_DIR%/secret.txt}');
+    assert.equal(expandEnv('{file:{env:ACP_PROXY_FILE_REF}}'), `{file:${secretFile}}`);
+    assert.equal(expandEnv(`{file:${literalFile}}`), 'literal-$ACP_PROXY_SHOULD_NOT_EXPAND-{env:ACP_PROXY_SHOULD_NOT_EXPAND}');
+    assert.throws(
+      () => expandEnv(`{file:${path.join(dir, 'missing.txt')}}`),
+      /Cannot read secret file .*missing\.txt.*from \{file:/
+    );
+
+    const cfg = config({
+      server: { ...baseServer, apiKey: `{file:${apiKeyFile}}` },
+      agents: [agent('gemini', 'a', { GEMINI_API_KEY: `{file:${secretFile}}` })]
+    });
+    assert.equal(cfg.server.apiKey, 'api-secret');
+    assert.equal(cfg.agents[0].env.GEMINI_API_KEY, 'file-secret');
+  } finally {
+    if (previousDir === undefined) delete process.env.ACP_PROXY_FILE_DIR;
+    else process.env.ACP_PROXY_FILE_DIR = previousDir;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousRef === undefined) delete process.env.ACP_PROXY_FILE_REF;
+    else process.env.ACP_PROXY_FILE_REF = previousRef;
+    if (previousLiteral === undefined) delete process.env.ACP_PROXY_SHOULD_NOT_EXPAND;
+    else process.env.ACP_PROXY_SHOULD_NOT_EXPAND = previousLiteral;
   }
 });
 

@@ -89,11 +89,16 @@ Environment variables live directly inside each agent block. There is no `env_se
 }
 ```
 
-Supported expansion forms:
+Supported expansion forms in `agents[].env` and `server.api_key`:
 
 - `{var:NAME}` and `{env:NAME}`
 - `{var:NAME:-fallback}` and `{env:NAME:-fallback}`
 - `${NAME}`, `${NAME:-fallback}`, and `$NAME`
+- `{file:/absolute/path/to/secret}`
+
+`{file:...}` reads a UTF-8 file during config loading and strips one trailing `\n` or `\r\n`. The file path is trimmed, may start with `~/`, and may contain Windows-style `%VAR%` environment references. The resolved path must be absolute; relative `{file:secret}` tokens are left unchanged. Missing or unreadable files fail startup with a contextual `Cannot read secret file ...` error.
+
+`{file:...}` expansion runs before environment expansion. This means env references cannot dynamically construct file paths in the same value. File contents are inserted literally and are not expanded again. Keep secret files outside the repo and permission them for the proxy user only, for example `0600`.
 
 The old `env_sections`, `env_section`, and `envSections` fields are intentionally rejected so stale configs fail loudly.
 

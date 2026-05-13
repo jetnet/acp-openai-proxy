@@ -504,7 +504,7 @@ JSON only. The old `env_sections` indirection is rejected.
 | `instance_id` | Unique runtime id (auto-derived if omitted) |
 | `command`, `args`, `cwd` | Subprocess launch parameters |
 | `models` | OpenAI model ids routed to this runtime |
-| `env` | Per-agent environment variables with `{var:NAME}` / `${NAME}` expansion |
+| `env` | Per-agent environment variables with `{var:NAME}` / `${NAME}` / `{file:/path}` expansion |
 | `model_selection` | Optional ACP session-config model mapping |
 | `mcp_servers` | Passed to ACP `session/new` |
 | `permission` | `deny` / `read_only` / `allow` |
@@ -513,15 +513,18 @@ JSON only. The old `env_sections` indirection is rejected.
 | `startup_timeout_seconds` | Max wait for initialization (default 30) |
 | `request_timeout_seconds` | Per-request timeout (inherited from server) |
 
-### 8.4  Environment variable expansion
+### 8.4  Config reference expansion
 
 ```
 {var:NAME}          {env:NAME}
 {var:NAME:-fallback} {env:NAME:-fallback}
 ${NAME}             ${NAME:-fallback}      $NAME
+{file:/absolute/path/to/secret}
 ```
 
 Missing variables without a fallback expand to empty string.
+
+`{file:...}` is supported in `agents[].env` values and `server.api_key`. It runs before environment expansion, reads UTF-8 secret files, strips one trailing `\n` or `\r\n`, supports `~/` and Windows-style `%VAR%` references inside the path, and requires the resolved path to be absolute. Relative file tokens are left unchanged. Missing or unreadable secret files fail config loading. Store secret files outside the repository and restrict permissions, for example `0600`.
 
 ### 8.5  Model selection via ACP session config
 
