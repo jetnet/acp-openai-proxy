@@ -308,6 +308,28 @@ flowchart TD
 
 **Cooldown:** Failed runtimes are marked unhealthy for `failure_cooldown_seconds` (default 60). Healthy runtimes are preferred, but cooling runtimes are still attempted if all are cooling.
 
+**Per-runtime health state** (`AgentRuntime` in `acpClient.js`):
+
+| Field | Set by | Cleared by |
+|-------|--------|------------|
+| `cooldownUntil` (epoch ms) | `markFailure()` | `markSuccess()` (immediately) or expiry |
+| `consecutiveFailures` | `markFailure()` | `markSuccess()` (reset to 0) |
+| `lastError` / `lastFailureAt` | `markFailure()` | `markSuccess()` |
+
+`inCooldown` is a live property: `Date.now() < cooldownUntil`. The `/health` endpoint exposes `cooldown_remaining_seconds`, `consecutive_failures`, `failure_count`, `success_count`, `last_error`, and `last_failure_at` per agent.
+
+**`healthyFirst()` reordering** (`router.js`): called on every request, after the strategy-specific base order is computed. It partitions the pool into healthy (not in cooldown) and cooling runtimes, then returns `[...healthy, ...cooling]`. If all runtimes are cooling, the original order is preserved so the system degrades gracefully rather than refusing all requests.
+
+**`QueueFullError` exception:** queue-full errors do NOT call `markFailure()` — a full queue means the runtime is busy, not broken, so no cooldown penalty is applied.
+
+**Concrete scenario — quota exhausted on agent-1, two-runtime pool:**
+
+1. **Request 1:** `healthyFirst` → both healthy → attempt order `[agent-1, agent-2]`. Agent-1 returns 429. `markFailure()` sets `cooldownUntil = now + 60 s`. Agent-2 tried next → succeeds.
+2. **Request 2 (5 s later):** `healthyFirst` sees agent-1 still cooling → reorders to `[agent-2, agent-1]`. Agent-2 is tried **first** and succeeds; agent-1 is never contacted.
+3. **Request 3 (70 s later):** agent-1's cooldown has expired → both healthy again → base sticky hash restores `[agent-1, agent-2]`. If agent-1 has recovered it serves normally; if it fails again it receives another cooldown window.
+
+The proxy therefore "knows" about a failed agent through the in-memory `cooldownUntil` timestamp. The knowledge is lost on process restart.
+
 **Streaming rule:** Failover is only safe before user-visible SSE content has been emitted. After partial output, retrying would duplicate text or agent side effects.
 
 

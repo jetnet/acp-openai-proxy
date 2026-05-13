@@ -340,6 +340,8 @@ Retry budget:
 
 With two runtimes and `max_retries = 2`, retryable failures can attempt `a, b, a, b`. If all attempts fail, the proxy returns an OpenAI-style `acp_error` with per-runtime summaries.
 
+**Health tracking and cooldown:** when a runtime fails (rate limit, quota exhausted, etc.) it is marked in cooldown for `failure_cooldown_seconds`. On every subsequent request the proxy reorders the pool so healthy runtimes are tried first — the failing agent is skipped until its cooldown expires, without any change needed in client code. A successful response immediately clears the cooldown. The state is in-memory and resets on proxy restart.
+
 ## Multimodal input and attachments
 
 Forwarded input mappings:
