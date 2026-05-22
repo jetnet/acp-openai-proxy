@@ -534,10 +534,26 @@ flowchart TD
     POOL --> NEWSESS["session/new → get configOptions"]
     NEWSESS --> HAS{model_selection<br/>configured?}
     HAS -->|Yes| MAP["Map 'gemini-pro' →<br/>model_selection.values['gemini-pro']<br/>= 'pro'"]
-    MAP --> SET["session/set_config_option<br/>{configId: 'model', value: 'pro'}"]
+    MAP --> ALLOWS{value in agent's<br/>configOptions?}
+    ALLOWS -->|Yes| SET["session/set_config_option<br/>{configId: 'model', value: 'pro'}"]
     SET --> PROMPT["session/prompt"]
+    ALLOWS -->|No, required:true| ERR1["throw AcpError 400"]
+    ALLOWS -->|No, required:false| WARN["WARN: model selection did not apply<br/>agent uses its default model"]
+    WARN --> PROMPT
     HAS -->|No| PROMPT
+    PROMPT --> EMPTY{Response empty AND<br/>model selection failed?}
+    EMPTY -->|Yes| ERR2["throw AcpError 502<br/>check agent authentication"]
+    EMPTY -->|No| DONE["Return response to client"]
 ```
+
+When `required: false` and the mapped value is not listed in the agent's `configOptions` (e.g. because the agent is not authenticated with the upstream provider), `applyRequestedModel` returns `null` and a `WARN` is emitted:
+
+```
+WARN model selection did not apply; agent is using its default model
+     {agent, requested_model, upstream_model}
+```
+
+If the agent then returns an empty response (no text, no tool calls), a 502 error is returned to the client with a message indicating the model could not be applied and prompting the user to check authentication. This prevents silent empty responses that are otherwise indistinguishable from a valid (but empty) reply.
 
 
 ---
@@ -589,11 +605,25 @@ All HTTP errors follow the OpenAI error shape:
 | Status | Meaning |
 |--------|---------|
 | 400 | Invalid request, unsupported capability, or capability failure across all candidates |
-| 401 | Missing or invalid bearer token |
+| 401 | Missing or invalid bearer token on the proxy, **or** ACP agent requires authentication (auth-required session update or stop reason detected) |
 | 404 | Unknown model or path |
-| 502 | ACP runtime failure (all runtimes exhausted) |
+| 502 | ACP runtime failure (all runtimes exhausted), or agent returned empty response after model selection silently failed |
 
 When all runtimes fail, the error message includes per-runtime failure summaries.
+
+### Authentication error detection
+
+The proxy detects agent-side authentication failures through two mechanisms:
+
+1. **Session update kind** — if the ACP process emits a `session/update` notification whose `sessionUpdate` field is one of `auth_required`, `not_authenticated`, `authentication_required`, `login_required`, or `unauthenticated`, the proxy converts it to a 401 `authentication_error` response immediately.
+
+2. **Stop reason** — if `session/prompt` returns with a `stopReason` matching the same set of values, the proxy raises a 401 error after the prompt completes.
+
+Both paths include any auth method names declared during `initialize` in the error message.
+
+### Model selection failure + empty response (502)
+
+When `model_selection.required` is `false` and the mapped model value is not present in the agent's `configOptions` (e.g. the agent is not authenticated with the upstream provider), model selection is silently skipped and the agent uses its default model. If that fallback model then returns no output (no text, no tool calls), the proxy raises a 502 instead of forwarding the empty response. The error message identifies the requested model, the fallback upstream model, and suggests checking agent authentication.
 
 ---
 

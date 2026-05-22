@@ -325,10 +325,12 @@ async function streamEndpoint(manager, pool, req, res, body, model, kind) {
       validateResourceLinks(promptBlocks, manager.config.server.resourceLinks);
       let text = '';
       let usage = null;
+      let modelSelectionApplied = true;
       for await (const event of runtime.streamPrompt(promptBlocks, abort.signal, { model })) {
         if (abort.signal.aborted || !sseWritable(res)) break;
         if (event.kind === 'session_ready') {
           req.responseModel = event.upstreamModelId ?? null;
+          modelSelectionApplied = event.modelSelectionApplied ?? true;
           if (!headersSent) {
             const headers = { 'x-acp-agent': runtime.runtimeId, 'x-acp-model': model };
             if (event.upstreamModelId) headers['x-acp-upstream-model'] = event.upstreamModelId;
@@ -348,12 +350,24 @@ async function streamEndpoint(manager, pool, req, res, body, model, kind) {
         } else if (event.kind === 'usage') {
           usage = event.usage;
         } else if (event.kind === 'done') {
+          if (!text && !emitted && !modelSelectionApplied) {
+            const upstream = req.responseModel ? ` (using ${req.responseModel})` : '';
+            throw new AcpError(
+              `agent ${runtime.runtimeId} returned empty response; requested model ${JSON.stringify(model)} could not be applied${upstream} — check agent authentication`
+            );
+          }
           await writeBufferedChatToolResult(res, kind, bufferChatToolCalls, responseId, model, created, body, promptBlocks, text, event.stopReason, includeUsage ? usage : null);
           if (sseWritable(res)) { await writeSse(res, doneSse()); res.end(); }
           return;
         }
       }
       if (abort.signal.aborted) return;
+      if (!text && !emitted && !modelSelectionApplied) {
+        const upstream = req.responseModel ? ` (using ${req.responseModel})` : '';
+        throw new AcpError(
+          `agent ${runtime.runtimeId} returned empty response; requested model ${JSON.stringify(model)} could not be applied${upstream} — check agent authentication`
+        );
+      }
       await writeBufferedChatToolResult(res, kind, bufferChatToolCalls, responseId, model, created, body, promptBlocks, text, 'end_turn', includeUsage ? usage : null);
       if (sseWritable(res)) { await writeSse(res, doneSse()); res.end(); }
       return;
@@ -388,14 +402,25 @@ async function collectRuntime(runtime, promptBlocks, model, signal = undefined, 
   let stopReason = 'end_turn';
   let usage = null;
   let upstreamModelId = null;
+  let modelSelectionApplied = true;
   for await (const event of runtime.streamPrompt(promptBlocks, signal, { model })) {
     if (signal?.aborted) break;
     if (event.kind === 'session_ready') {
       upstreamModelId = event.upstreamModelId;
+      modelSelectionApplied = event.modelSelectionApplied ?? true;
       if (req && event.upstreamModelId) req.responseModel = event.upstreamModelId;
     } else if (event.kind === 'chunk' || event.kind === 'tool') text += event.text || '';
     else if (event.kind === 'usage') usage = event.usage;
     else if (event.kind === 'done') stopReason = event.stopReason || 'end_turn';
+  }
+  if (!text && !modelSelectionApplied && model) {
+    const upstream = upstreamModelId ? ` (using ${upstreamModelId})` : '';
+    const err = new AcpError(
+      `agent ${runtime.runtimeId} returned empty response; requested model ${JSON.stringify(model)} could not be applied${upstream} — check agent authentication`
+    );
+    err.status = 502;
+    err.type = 'acp_error';
+    throw err;
   }
   return { text, stopReason, usage, upstreamModelId };
 }

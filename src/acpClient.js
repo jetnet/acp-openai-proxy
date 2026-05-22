@@ -588,7 +588,23 @@ export class AgentRuntime {
             );
             const upstreamModelId =
                 appliedModelId ?? session?.models?.currentModelId ?? null;
-            yield { kind: "session_ready", sessionId, upstreamModelId };
+            const modelSelectionApplied = !options.model || !!appliedModelId;
+            if (options.model && !appliedModelId) {
+                this.logger.warn?.(
+                    "model selection did not apply; agent is using its default model",
+                    {
+                        agent: this.runtimeId,
+                        requested_model: options.model,
+                        upstream_model: upstreamModelId ?? "(unknown)",
+                    },
+                );
+            }
+            yield {
+                kind: "session_ready",
+                sessionId,
+                upstreamModelId,
+                modelSelectionApplied,
+            };
             const promptPromise = conn
                 .request(
                     "session/prompt",
@@ -623,24 +639,48 @@ export class AgentRuntime {
                     for (const event of eventsFromUpdate(
                         item,
                         this.config.exposeToolUpdates,
-                    ))
+                    )) {
+                        if (event.kind === "auth_required") {
+                            const err = new AcpError(
+                                event.message ??
+                                    "ACP agent requires authentication; please log in first",
+                            );
+                            err.status = 401;
+                            err.type = "authentication_error";
+                            throw err;
+                        }
                         yield event;
+                    }
                 }
                 await promptPromise;
                 if (promptError) throw promptError;
                 this.markSuccess();
+                const stopReason = String(
+                    promptResult?.stopReason ??
+                        promptResult?.stop_reason ??
+                        "end_turn",
+                );
+                if (AUTH_REQUIRED_KINDS.includes(stopReason)) {
+                    const authMethods = conn.authMethods ?? [];
+                    const methodStr = authMethods.length
+                        ? ` (${authMethods.map((m) => m?.id ?? m?.name ?? String(m)).join(", ")})`
+                        : "";
+                    const err = new AcpError(
+                        `ACP agent ${
+                            this.config.instanceId ??
+                            this.config.name ??
+                            "agent"
+                        } is not authenticated${methodStr}; please log in first`,
+                    );
+                    err.status = 401;
+                    err.type = "authentication_error";
+                    throw err;
+                }
                 const mappedUsage = openaiUsageFromAcpUsage(
                     promptResult?.usage,
                 );
                 if (mappedUsage) yield { kind: "usage", usage: mappedUsage };
-                yield {
-                    kind: "done",
-                    stopReason: String(
-                        promptResult?.stopReason ??
-                            promptResult?.stop_reason ??
-                            "end_turn",
-                    ),
-                };
+                yield { kind: "done", stopReason };
             } finally {
                 if (signal) signal.removeEventListener("abort", abortListener);
             }
@@ -798,6 +838,14 @@ function flattenOptionValues(options) {
     return out;
 }
 
+const AUTH_REQUIRED_KINDS = [
+    "auth_required",
+    "not_authenticated",
+    "authentication_required",
+    "login_required",
+    "unauthenticated",
+];
+
 export function eventsFromUpdate(update, exposeToolUpdates = false) {
     const { kind, payload } = normalizeUpdate(update);
     if (!kind) return [];
@@ -825,6 +873,23 @@ export function eventsFromUpdate(update, exposeToolUpdates = false) {
     ) {
         const text = toolUpdateText(kind, payload);
         return text ? [{ kind: "tool", text }] : [];
+    }
+    if (AUTH_REQUIRED_KINDS.includes(kind)) {
+        const methods =
+            payload.authMethods ??
+            payload.auth_methods ??
+            payload.methods ??
+            [];
+        const methodStr =
+            Array.isArray(methods) && methods.length
+                ? ` via ${methods.map((m) => (typeof m === "string" ? m : (m?.id ?? m?.name ?? String(m)))).join(", ")}`
+                : "";
+        return [
+            {
+                kind: "auth_required",
+                message: `ACP agent requires authentication${methodStr}`,
+            },
+        ];
     }
     return [];
 }
