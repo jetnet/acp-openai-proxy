@@ -63,7 +63,7 @@ curl http://127.0.0.1:11435/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer local-proxy-token' \
   -d '{
-    "model": "gemini",
+    "model": "opencode-big-pickle",
     "stream": true,
     "messages": [{"role": "user", "content": "Say hello."}]
   }'
@@ -77,12 +77,12 @@ Environment variables live directly inside each agent block. There is no `env_se
 {
   "agents": [
     {
-      "name": "gemini",
-      "instance_id": "gemini-a",
+      "name": "opencode",
+      "instance_id": "opencode-a",
       "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-      "models": ["gemini"],
-      "env": {"GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}"},
+      "args": ["-y", "opencode-ai@latest", "acp"],
+      "models": ["opencode-big-pickle"],
+      "env": {"XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share"},
       "permission": "deny"
     }
   ]
@@ -118,21 +118,21 @@ Configure multiple agents with the same `models` entry. This starts multiple ACP
   },
   "agents": [
     {
-      "name": "gemini",
-      "instance_id": "gemini-a",
+      "name": "opencode",
+      "instance_id": "opencode-a",
       "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-      "models": ["gemini"],
-      "env": {"GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}"},
+      "args": ["-y", "opencode-ai@latest", "acp"],
+      "models": ["opencode-big-pickle"],
+      "env": {"XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share"},
       "permission": "deny"
     },
     {
-      "name": "gemini",
-      "instance_id": "gemini-b",
+      "name": "opencode",
+      "instance_id": "opencode-b",
       "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-      "models": ["gemini"],
-      "env": {"GEMINI_API_KEY": "{var:GEMINI_API_KEY_B}"},
+      "args": ["-y", "opencode-ai@latest", "acp"],
+      "models": ["opencode-big-pickle"],
+      "env": {"XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b/.local/share"},
       "permission": "deny"
     }
   ]
@@ -143,9 +143,9 @@ Configure multiple agents with the same `models` entry. This starts multiple ACP
 
 ```json
 {
-  "id": "gemini",
+  "id": "opencode-big-pickle",
   "owned_by": "acp-agent-pool",
-  "acp_agents": ["gemini-a", "gemini-b"],
+  "acp_agents": ["opencode-a", "opencode-b"],
   "x_acp_pool_size": 2,
   "x_acp_routing_strategy": "sticky_failover"
 }
@@ -154,9 +154,9 @@ Configure multiple agents with the same `models` entry. This starts multiple ACP
 Generation responses include:
 
 ```text
-X-ACP-Agent: gemini-a
-X-ACP-Model: gemini
-X-ACP-Upstream-Model: gemini-2.5-flash-lite     # only when model_selection fired
+X-ACP-Agent: opencode-a
+X-ACP-Model: opencode-big-pickle
+X-ACP-Upstream-Model: opencode/big-pickle     # only when model_selection fired
 X-Request-ID: req_a1b2c3d4e5f6
 ```
 
@@ -168,34 +168,34 @@ So this config:
 
 ```json
 {
-  "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-  "models": ["gemini-flash", "gemini-pro"]
+  "args": ["-y", "opencode-ai@latest", "acp"],
+  "models": ["fast", "smart"]
 }
 ```
 
-exposes two OpenAI model ids, but both ids still talk to the same started Gemini CLI process configured with `--model auto`, unless the agent also supports ACP session model configuration and `model_selection` is configured.
+exposes two OpenAI model ids, but both ids still talk to the same started agent process running its own default model, unless the agent also supports ACP session model configuration and `model_selection` is configured.
 
-For simple, reliable Gemini CLI usage, define one agent block per actual Gemini model:
+For agents that pin their model at launch time, define one agent block per actual upstream model:
 
 ```json
 {
   "agents": [
     {
-      "name": "gemini-flash",
-      "instance_id": "gemini-flash-a",
+      "name": "copilot-mini",
+      "instance_id": "copilot-mini-a",
       "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "flash", "--experimental-acp"],
-      "models": ["gemini-flash"],
-      "env": {"GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}"},
+      "args": ["-y", "@github/copilot@latest", "--acp", "--stdio", "--model", "gpt-5-mini"],
+      "models": ["gpt-5-mini"],
+      "env": {"HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/copilot-mini-a"},
       "permission": "deny"
     },
     {
-      "name": "gemini-pro",
-      "instance_id": "gemini-pro-a",
+      "name": "copilot-full",
+      "instance_id": "copilot-full-a",
       "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "pro", "--experimental-acp"],
-      "models": ["gemini-pro"],
-      "env": {"GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}"},
+      "args": ["-y", "@github/copilot@latest", "--acp", "--stdio", "--model", "gpt-5.2"],
+      "models": ["gpt-5.2"],
+      "env": {"HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/copilot-full-a"},
       "permission": "deny"
     }
   ]
@@ -210,12 +210,10 @@ Some ACP agents expose session configuration options, including a model selector
 
 ### How it works
 
-1. When the proxy creates a new ACP session (`session/new`), the agent may return one of two shapes:
-   - **Standard ACP** — a `configOptions` array of configuration knobs.
-   - **Gemini CLI extension** — a `models` object with `availableModels: [{ modelId, name }]` and `currentModelId`.
-2. If `model_selection` is configured on the agent, the proxy looks for a config option matching `config_id` (or falls back to one with `category: "model"` or `id: "model"`). When the agent only exposes the Gemini extension, the proxy uses that automatically.
-3. The proxy maps the OpenAI model string from the request (e.g. `"gemini-pro"`) to either an ACP config value (standard) or a Gemini `modelId` (extension) using the `values` map.
-4. The proxy calls `session/set_config_option` (standard) or `session/set_model` (Gemini extension) with the resolved value before sending the prompt.
+1. When the proxy creates a new ACP session (`session/new`), the agent may return a `configOptions` array of configuration knobs.
+2. If `model_selection` is configured on the agent, the proxy looks for a config option matching `config_id`, or falls back to one with `category: "model"` or `id: "model"`.
+3. The proxy maps the OpenAI model string from the request (e.g. `"opencode-big-pickle"`) to an ACP config value using the `values` map.
+4. The proxy calls `session/set_config_option` with the resolved value before sending the prompt.
 
 ### Example
 
@@ -227,13 +225,13 @@ Some ACP agents expose session configuration options, including a model selector
       "instance_id": "agent-a",
       "command": "some-acp-agent",
       "args": ["acp"],
-      "models": ["gemini-flash", "gemini-pro"],
+      "models": ["fast", "smart"],
       "model_selection": {
         "type": "session_config",
         "config_id": "model",
         "values": {
-          "gemini-flash": "flash",
-          "gemini-pro": "pro"
+          "fast": "flash",
+          "smart": "pro"
         }
       },
       "env": {"API_KEY": "{var:API_KEY_A}"},
@@ -247,41 +245,43 @@ Some ACP agents expose session configuration options, including a model selector
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `type` | string | `"session_config"` | Must be `"session_config"`. Only supported type. |
+| `type` | string | `"auto"` | `"session_config"` or `"auto"`. Both resolve the model through the agent's session config options; `"auto"` is simply the default when `type` is omitted. |
 | `config_id` | string | auto-detect | ACP config option id to set. When omitted, the proxy auto-detects by looking for a config option with `category: "model"` or `id: "model"` in the agent's `session/new` response. |
-| `values` | object | `{}` | Maps OpenAI model ids to upstream values. Keys are the strings clients send as `model`; values are what gets passed to `session/set_config_option` (standard ACP) or `session/set_model` as `modelId` (Gemini extension). When a model id is not in this map, the proxy tries to match it against the agent's own option/availableModels list by value, name, or `modelId`. |
+| `values` | object | `{}` | Maps OpenAI model ids to upstream values. Keys are the strings clients send as `model`; values are what gets passed to `session/set_config_option`. When a model id is not in this map, the proxy tries to match it against the agent's own option list by value or name. |
 | `required` | boolean | `true` | Controls error behaviour when model selection fails. See ["What `required` does"](#what-required-does) below. |
 
 You can also set `model_selection: true` as shorthand for `{ "type": "auto", "required": true }` with auto-detection and no explicit value mappings.
 
 ### How to know if an ACP agent supports model selection
 
-There is no way to know in advance from configuration alone. The proxy discovers support **at runtime** when the agent responds to `session/new`. The agent supports model selection if its response contains either a `configOptions` entry with a model category (standard ACP) or a `models.availableModels` array (Gemini CLI extension). If it returns neither, it does not.
+There is no way to know in advance from configuration alone. The proxy discovers support **at runtime** when the agent responds to `session/new`. The agent supports model selection if its response contains a `configOptions` entry with a model category. If it does not, the proxy cannot switch models for that agent.
 
 To check: start the proxy with `ACP_OPENAI_PROXY_LOG_LEVEL=debug` and inspect the `session/new` response logged for each agent.
 
-### Gemini CLI example
+### OpenCode example
 
-The Google Gemini CLI uses the `models` extension shape rather than `configOptions`. Configure it like:
+OpenCode returns a `model` config option from `session/new`, with one entry per model its account can reach. Configure it like:
 
 ```json
 {
-  "name": "gemini",
+  "name": "opencode",
   "command": "npx",
-  "args": ["-y", "@google/gemini-cli@latest", "--acp"],
-  "models": ["flash-lite", "flash", "pro"],
+  "args": ["-y", "opencode-ai@latest", "acp"],
+  "models": ["opencode-big-pickle", "opencode-mimo", "opencode-nemotron"],
   "model_selection": {
+    "type": "session_config",
+    "config_id": "model",
     "required": true,
     "values": {
-      "flash-lite": "gemini-2.5-flash-lite",
-      "flash":      "gemini-2.5-flash",
-      "pro":        "gemini-2.5-pro"
+      "opencode-big-pickle": "opencode/big-pickle",
+      "opencode-mimo":       "opencode/mimo-v2.5-free",
+      "opencode-nemotron":   "opencode/nemotron-3-ultra-free"
     }
   }
 }
 ```
 
-The proxy will issue `session/set_model` with the mapped `modelId` before each prompt. Run the [model probe](scripts/) trick (`session/new` with no follow-up) to discover the actual `modelId` strings the CLI advertises.
+The proxy issues `session/set_config_option` with the mapped value before each prompt. Run the model probe trick (`session/new` with no follow-up) to discover the exact option values the installed CLI advertises; they change as the account's provider list changes.
 
 ### What `required` does
 
@@ -291,26 +291,26 @@ There are four points where selection can fail:
 
 | Failure | `required: true` | `required: false` |
 | --- | --- | --- |
-| Agent exposes neither `configOptions` nor `models.availableModels` | 502 `acp_error` to client | skip; send prompt as-is |
+| Agent exposes no `configOptions` | 502 `acp_error` to client | skip; send prompt as-is |
 | Your `values` map has no entry for the requested model id (and no automatic match from the agent's own option list) | 502 | skip |
 | The mapped value is not in the agent's allowed value list | 502 | skip |
-| Standard path: no `configId` resolvable | 502 | skip |
+| No `configId` resolvable | 502 | skip |
 
-In every "skip" case the proxy does **not** call `session/set_config_option` / `session/set_model`. The agent receives the prompt and answers using its CLI-launch default model (e.g. `--model auto` for the Gemini CLI).
+In every "skip" case the proxy does **not** call `session/set_config_option`. The agent receives the prompt and answers using whatever model its session already had.
 
 Practical recommendation:
 
 - **`required: true`** — when a model id maps to a *specific* upstream model and a broken mapping should fail loudly. Good for cost-control or compliance pinning.
 - **`required: false`** — when the `values` map is best-effort and an unmapped id should silently use the agent's default rather than 502. The trade-off is that `x-acp-model` in the response reflects only the OpenAI-style id the client sent, not the upstream model that actually answered.
 
-Concrete example with the Gemini agent and `required: false`:
+Concrete example with the OpenCode agent and `required: false`:
 
 | Client requests `model: …` | What happens |
 | --- | --- |
-| `"gemini-flash-lite"` *(mapped)* | `session/set_model { modelId: "gemini-3.1-flash-lite-preview" }` → flash-lite answers |
-| `"some-unknown-model"` | no `set_model` call → agent answers using its launch default (`--model auto`) |
+| `"opencode-mimo"` *(mapped)* | `session/set_config_option { configId: "model", value: "opencode/mimo-v2.5-free" }` → that model answers |
+| `"some-unknown-model"` | no `set_config_option` call → agent answers using its session default |
 
-With `required: true`, the second row would fail with `502 acp_error: agent ... cannot map requested model "some-unknown-model" to a Gemini availableModels entry`.
+With `required: true`, the second row would fail with `502 acp_error: agent ... cannot map requested model "some-unknown-model" to an ACP model config option`.
 
 ### When to use `model_selection` vs. separate agent blocks
 
@@ -397,7 +397,7 @@ Run with Compose:
 docker compose up --build
 ```
 
-The image installs the ACP CLIs it needs at build time, so the container does not fetch `npx` packages on startup. The compose file mounts a persistent `auth` volume at `/auth`. Each agent uses a subdirectory under that volume for `HOME`, and Gemini also uses `GEMINI_CLI_HOME`, so CLI state survives container restarts.
+The image installs the ACP CLIs it needs at build time, so the container does not fetch `npx` packages on startup. The compose file mounts a persistent `auth` volume at `/auth`. Each agent uses a subdirectory under that volume for `HOME`, and OpenCode also uses `XDG_DATA_HOME` and `XDG_CONFIG_HOME`, so CLI state and logins survive container restarts.
 
 The compose service runs as a non-root user with a read-only root filesystem, no added Linux capabilities, `no-new-privileges`, and a private `/tmp` scratch mount. It also binds the published port to `127.0.0.1` only.
 
@@ -413,14 +413,14 @@ Current config:
 
 | Agent | Command | Persistent home |
 | --- | --- | --- |
-| Gemini CLI | `gemini --model auto --experimental-acp` | `GEMINI_CLI_HOME=${AUTH_ROOT}/gemini-a` |
-| Gemini CLI | `gemini --model auto --experimental-acp` | `GEMINI_CLI_HOME=${AUTH_ROOT}/gemini-b` |
+| OpenCode | `opencode acp` | `XDG_DATA_HOME=${AUTH_ROOT}/opencode-a/.local/share` |
+| OpenCode | `opencode acp` | `XDG_DATA_HOME=${AUTH_ROOT}/opencode-b/.local/share` |
 | Claude ACP | `claude-agent-acp` | `HOME=${AUTH_ROOT}/claude-ka` |
 | GitHub Copilot | `copilot --acp --stdio --model gpt-5-mini --effort high` | `HOME=${AUTH_ROOT}/github-gpt-5-mini-ka` |
 
 The image build installs these packages by default:
 
-- `@google/gemini-cli@latest`
+- `opencode-ai@latest`
 - `@agentclientprotocol/claude-agent-acp@latest`
 - `@github/copilot@latest`
 
@@ -433,7 +433,6 @@ The image build installs these packages by default:
 | Qoder CLI | `npx @qoder-ai/qodercli@latest --model auto --acp` | `HOME=${AUTH_ROOT}/qoder` |
 | Kilo Code | `npx --yes --package @kilocode/cli@latest kilo --model kilo/minimax/minimax-m2.7 acp` | `HOME=${AUTH_ROOT}/kilo-code` |
 | Codex CLI | `npx @zed-industries/codex-acp@latest -c model="o3"` | `HOME=${AUTH_ROOT}/codex` |
-| OpenCode | `npx -y opencode-ai@latest acp` | `XDG_DATA_HOME=${AUTH_ROOT}/opencode/.local/share` |
 | OpenClaw | `openclaw acp` | `HOME=${AUTH_ROOT}/openclaw` |
 | Kiro CLI | `kiro-cli settings chat.defaultModel claude-opus-4.7 && kiro-cli acp` | `HOME=${AUTH_ROOT}/kiro` |
 | Hermes Agent | `hermes model && hermes acp` | `HOME=${AUTH_ROOT}/hermes` |
@@ -453,4 +452,4 @@ npm run check
 npm test
 ```
 
-Current expected test result: 44 passing tests.
+Current expected test result: 46 passing tests.

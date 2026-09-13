@@ -24,13 +24,13 @@ graph LR
     end
 
     subgraph ACP Agents["ACP Agent Subprocesses"]
-        GA["gemini-a (stdio)"]
-        GB["gemini-b (stdio)"]
+        GA["opencode-a (stdio)"]
+        GB["opencode-b (stdio)"]
         CA["claude-a (stdio)"]
     end
 
     subgraph Providers["Upstream Model Providers"]
-        GEMINI[Gemini API]
+        OPENCODE[OpenCode providers]
         ANTHROPIC[Anthropic API]
     end
 
@@ -38,7 +38,7 @@ graph LR
     HTTP --> COMPAT
     COMPAT --> RT
     RT -->|JSON-RPC / stdio| GA & GB & CA
-    GA & GB -->|Provider API key| GEMINI
+    GA & GB -->|Account login| OPENCODE
     CA -->|Provider API key| ANTHROPIC
 ```
 
@@ -469,12 +469,12 @@ ACP usage fields are mapped to OpenAI format (`prompt_tokens`, `completion_token
   },
   "agents": [
     {
-      "name": "gemini",
-      "instance_id": "gemini-a",
+      "name": "opencode",
+      "instance_id": "opencode-a",
       "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-      "models": ["gemini"],
-      "env": { "GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}" },
+      "args": ["-y", "opencode-ai@latest", "acp"],
+      "models": ["opencode-big-pickle"],
+      "env": { "XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share" },
       "permission": "deny"
     }
   ]
@@ -530,12 +530,12 @@ Missing variables without a fallback expand to empty string.
 
 ```mermaid
 flowchart TD
-    REQ["Client requests model='gemini-pro'"] --> POOL["Router selects runtime from 'gemini-pro' pool"]
+    REQ["Client requests model='opencode-mimo'"] --> POOL["Router selects runtime from 'opencode-mimo' pool"]
     POOL --> NEWSESS["session/new → get configOptions"]
     NEWSESS --> HAS{model_selection<br/>configured?}
-    HAS -->|Yes| MAP["Map 'gemini-pro' →<br/>model_selection.values['gemini-pro']<br/>= 'pro'"]
+    HAS -->|Yes| MAP["Map 'opencode-mimo' →<br/>model_selection.values['opencode-mimo']<br/>= 'opencode/mimo-v2.5-free'"]
     MAP --> ALLOWS{value in agent's<br/>configOptions?}
-    ALLOWS -->|Yes| SET["session/set_config_option<br/>{configId: 'model', value: 'pro'}"]
+    ALLOWS -->|Yes| SET["session/set_config_option<br/>{configId: 'model',<br/>value: 'opencode/mimo-v2.5-free'}"]
     SET --> PROMPT["session/prompt"]
     ALLOWS -->|No, required:true| ERR1["throw AcpError 400"]
     ALLOWS -->|No, required:false| WARN["WARN: model selection did not apply<br/>agent uses its default model"]
@@ -643,8 +643,8 @@ Runtime: Node.js 20+. Zero npm dependencies. Uses `node:http`, `node:child_proce
 graph TD
     subgraph Container["Docker Container (read-only rootfs)"]
         PROXY["acp-openai-proxy<br/>0.0.0.0:11435"]
-        GEMINI_A["gemini-a process"]
-        GEMINI_B["gemini-b process"]
+        OPENCODE_A["opencode-a process"]
+        OPENCODE_B["opencode-b process"]
         CLAUDE["claude-a process"]
     end
 
@@ -654,19 +654,19 @@ graph TD
     end
 
     HOST["Host :11435<br/>(127.0.0.1 only)"] -->|port mapping| PROXY
-    PROXY -->|stdio| GEMINI_A & GEMINI_B & CLAUDE
-    AUTH --- GEMINI_A & GEMINI_B & CLAUDE
+    PROXY -->|stdio| OPENCODE_A & OPENCODE_B & CLAUDE
+    AUTH --- OPENCODE_A & OPENCODE_B & CLAUDE
 ```
 
 Security posture: non-root user, read-only root filesystem, no added Linux capabilities, `no-new-privileges`, private `/tmp`. Published port bound to `127.0.0.1`.
 
-Agent CLIs are installed at image build time (no `npx` fetches at runtime). The `/auth` volume persists CLI state across container restarts. Each agent uses a subdirectory (`GEMINI_CLI_HOME`, `HOME`) for isolation.
+Agent CLIs are installed at image build time (no `npx` fetches at runtime). The `/auth` volume persists CLI state across container restarts. Each agent uses a subdirectory (`HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`) for isolation.
 
 ### 11.3  Supported ACP agents
 
 | Agent | Command | Notes |
 |-------|---------|-------|
-| Gemini CLI | `gemini --model auto --experimental-acp` | Default in Docker image |
+| OpenCode | `opencode acp` | Default in Docker image |
 | Claude ACP | `claude-agent-acp` | Default in Docker image |
 | GitHub Copilot | `copilot --acp --stdio --model gpt-5-mini` | Default in Docker image |
 | Qwen Code | `npx @qwen-code/qwen-code@latest --acp` | Add to image as needed |

@@ -27,8 +27,8 @@ In scope:
 
 Out of scope:
 
-- Vulnerabilities in third-party ACP agent CLIs (Gemini, Claude, Copilot,
-  Codex, Kilo, Qwen, OpenCode, etc.). Report those to their upstream projects.
+- Vulnerabilities in third-party ACP agent CLIs (OpenCode, Claude, Copilot,
+  Codex, Kilo, Qwen, etc.). Report those to their upstream projects.
 - Vulnerabilities in Node.js, npm, or the base Docker image.
 - Misuse of `permission: allow` or `env_passthrough: ["*"]`, which are
   explicit opt-ins to looser behaviour.
@@ -51,7 +51,7 @@ What this proxy does **not** defend against:
 - SSRF inside an ACP agent. The proxy can optionally constrain
   `resource_link` URLs (see `server.resource_links`), but if the agent fetches
   resources itself, the agent's network egress matters more than this policy.
-- Provider-side abuse (e.g., a prompt that exhausts your Gemini/Anthropic
+- Provider-side abuse (e.g., a prompt that exhausts your OpenCode/Anthropic
   quota). Rate limiting outside the proxy (nginx, Cloudflare) is recommended
   for non-loopback deployments.
 

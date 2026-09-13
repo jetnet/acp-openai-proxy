@@ -12,7 +12,7 @@
 //   5. shuts the proxy down with SIGTERM and asserts a clean exit.
 //
 // Why it stays cheap:
-//   - Targets `flash-lite` (Gemini's cheapest model by far).
+//   - Targets a free / low-cost model id such as an OpenCode free model.
 //   - Prompt is ~8 input tokens; reply is constrained to a few output tokens.
 //   - Only 3 generations total per run; no streaming, no responses-api.
 //   - Skips entirely if the configured "smoke model" is missing from the
@@ -45,8 +45,8 @@ const bootTimeoutSec = Number(process.env.ACP_SMOKE_BOOT_TIMEOUT_S || 120);
 // Preference order for picking a smoke model when ACP_SMOKE_MODEL is not set.
 // Earlier entries are cheaper / less-rate-limited in typical setups.
 const SMOKE_MODEL_PREFERENCE = [
-  "gemini-flash-lite", "flash-lite", "gemini-flash", "flash",
-  "claude-haiku", "haiku", "big-pickle", "gpt-5-mini",
+  "opencode-nemotron", "opencode-mimo", "opencode-big-pickle",
+  "big-pickle", "claude-haiku", "haiku", "gpt-5-mini",
 ];
 const smokeModelOverride = process.env.ACP_SMOKE_MODEL || "";
 
