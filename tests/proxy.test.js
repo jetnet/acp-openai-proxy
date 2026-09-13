@@ -200,9 +200,9 @@ test('access log carries request_model and response_model', async () => {
   const app = new AcpOpenAiServer(config({
     server: { ...baseServer },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-flash-lite,gemini-2.5-pro' }),
+      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'upstream-flash-lite,upstream-pro' }),
       models: ['gemini-flash-lite'],
-      model_selection: { values: { 'gemini-flash-lite': 'gemini-2.5-flash-lite' }, required: true }
+      model_selection: { values: { 'gemini-flash-lite': 'upstream-flash-lite' }, required: true }
     }]
   }), { logger: recordingLogger });
   await app.startAtBoot();
@@ -220,24 +220,34 @@ test('access log carries request_model and response_model', async () => {
   const httpLog = captured.find((c) => c.msg === 'http request' && c.fields?.path === '/v1/chat/completions');
   assert.ok(httpLog, 'expected an http request log line');
   assert.equal(httpLog.fields.request_model, 'gemini-flash-lite');
-  assert.equal(httpLog.fields.response_model, 'gemini-2.5-flash-lite');
+  assert.equal(httpLog.fields.response_model, 'upstream-flash-lite');
   assert.match(httpLog.fields.request_id, /^req_[0-9a-f]+$/);
 });
 
-test('model_selection (gemini) rejects unmapped model when required', async () => {
+test('model_selection rejects a value the agent does not list when required', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1, failureCooldownSeconds: 0 },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-pro,gemini-2.5-flash' }),
+      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
       models: ['gemini'],
-      model_selection: { required: true, values: { 'gemini': 'gemini-9.9-unobtainium' } }
+      model_selection: { required: true, values: { 'gemini': 'unobtainium' } }
     }]
   }, async ({ baseUrl }) => {
     const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hi' }] });
     assert.ok(r.status === 502 || r.status === 400, `expected 4xx/5xx; got ${r.status}`);
     const body = await r.json();
-    assert.match(body.error.message, /availableModels does not include modelId/);
+    assert.match(body.error.message, /does not list value/);
   });
+});
+
+test('model_selection rejects an unknown type', () => {
+  assert.throws(
+    () => config({
+      server: { ...baseServer },
+      agents: [{ ...agent('gemini', 'a'), model_selection: { type: 'whatever' } }]
+    }),
+    /must be one of: session_config, auto/
+  );
 });
 
 test('model_selection maps OpenAI model ids to ACP session config values', async () => {
@@ -839,18 +849,19 @@ test('client abort during streaming propagates session/cancel to the agent', asy
   }
 });
 
-test('Gemini extension maps OpenAI ids via session/set_model', async () => {
+test('session config selection reports the upstream model in response headers', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_GEMINI_MODELS: 'gemini-2.5-pro,gemini-2.5-flash,gemini-2.5-flash-lite' }),
+      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'upstream-pro,upstream-flash,upstream-flash-lite' }),
       models: ['flash-lite', 'flash', 'pro'],
       model_selection: {
+        type: 'session_config',
         required: true,
         values: {
-          'pro': 'gemini-2.5-pro',
-          'flash': 'gemini-2.5-flash',
-          'flash-lite': 'gemini-2.5-flash-lite'
+          'pro': 'upstream-pro',
+          'flash': 'upstream-flash',
+          'flash-lite': 'upstream-flash-lite'
         }
       }
     }]
@@ -858,12 +869,12 @@ test('Gemini extension maps OpenAI ids via session/set_model', async () => {
     const r = await post(baseUrl, { model: 'pro', messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('x-acp-model'), 'pro');
-    assert.equal(r.headers.get('x-acp-upstream-model'), 'gemini-2.5-pro');
+    assert.equal(r.headers.get('x-acp-upstream-model'), 'upstream-pro');
     const body = await r.json();
-    assert.match(body.choices[0].message.content, /Echo\[a\/gemini-2\.5-pro\]/);
+    assert.match(body.choices[0].message.content, /Echo\[a\/upstream-pro\]/);
     const flashLite = await post(baseUrl, { model: 'flash-lite', messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(flashLite.status, 200);
-    assert.equal(flashLite.headers.get('x-acp-upstream-model'), 'gemini-2.5-flash-lite');
+    assert.equal(flashLite.headers.get('x-acp-upstream-model'), 'upstream-flash-lite');
   });
 });
 

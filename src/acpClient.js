@@ -304,16 +304,8 @@ export class AcpConnection {
             sessionId,
             configOptions:
                 result?.configOptions ?? result?.config_options ?? [],
-            models: result?.models ?? null,
             modes: result?.modes ?? null,
         };
-    }
-    async setSessionModel(sessionId, modelId) {
-        return await this.request(
-            "session/set_model",
-            { sessionId, modelId },
-            this.config.requestTimeoutSeconds,
-        );
     }
     async newSession() {
         return (await this.newSessionInfo()).sessionId;
@@ -345,7 +337,7 @@ export class AcpConnection {
             {};
         if (
             sessionCapabilities &&
-            Object.prototype.hasOwnProperty.call(sessionCapabilities, "close")
+            Object.hasOwn(sessionCapabilities, "close")
         ) {
             try {
                 await this.request("session/close", { sessionId }, 10);
@@ -429,13 +421,13 @@ export class AcpConnection {
     }
     async dispatchMessage(message) {
         if (
-            Object.prototype.hasOwnProperty.call(message, "id") &&
-            (Object.prototype.hasOwnProperty.call(message, "result") ||
-                Object.prototype.hasOwnProperty.call(message, "error"))
+            Object.hasOwn(message, "id") &&
+            (Object.hasOwn(message, "result") ||
+                Object.hasOwn(message, "error"))
         )
             this.handleResponse(message);
         else if (
-            Object.prototype.hasOwnProperty.call(message, "id") &&
+            Object.hasOwn(message, "id") &&
             message.method
         )
             await this.handleRequest(message);
@@ -587,7 +579,12 @@ export class AgentRuntime {
                 options.model,
             );
             const upstreamModelId =
-                appliedModelId ?? session?.models?.currentModelId ?? null;
+                appliedModelId ??
+                currentModelValue(
+                    session,
+                    this.config.modelSelection?.configId,
+                ) ??
+                null;
             const modelSelectionApplied = !options.model || !!appliedModelId;
             if (options.model && !appliedModelId) {
                 this.logger.warn?.(
@@ -703,24 +700,11 @@ function applyRequestedModel(conn, config, session, requestedModel) {
     if (!selection || !requestedModel) return Promise.resolve(null);
     const type = selection.type || "auto";
     const standardOptions = Array.isArray(session?.configOptions) ? session.configOptions : [];
-    const geminiAvailable = Array.isArray(session?.models?.availableModels);
 
-    if (type === "session_config") {
-        if (standardOptions.length > 0) return applyStandardModelSelection(conn, config, session, requestedModel, selection, standardOptions);
-        if (selection.required) throw new AcpError(`agent ${config.instanceId ?? config.name} did not expose configOptions (model_selection.type=session_config)`);
-        return Promise.resolve(null);
-    }
-    if (type === "gemini") {
-        if (geminiAvailable) return applyGeminiModelSelection(conn, config, session, requestedModel, selection);
-        if (selection.required) throw new AcpError(`agent ${config.instanceId ?? config.name} did not expose models.availableModels (model_selection.type=gemini)`);
-        return Promise.resolve(null);
-    }
-    // auto: try standard first, fall back to Gemini
     if (standardOptions.length > 0) return applyStandardModelSelection(conn, config, session, requestedModel, selection, standardOptions);
-    if (geminiAvailable) return applyGeminiModelSelection(conn, config, session, requestedModel, selection);
     if (selection.required) {
         throw new AcpError(
-            `agent ${config.instanceId ?? config.name} did not expose a session-config model option or a Gemini models extension`,
+            `agent ${config.instanceId ?? config.name} did not expose configOptions (model_selection.type=${type})`,
         );
     }
     return Promise.resolve(null);
@@ -757,34 +741,12 @@ async function applyStandardModelSelection(conn, config, session, requestedModel
     return value;
 }
 
-async function applyGeminiModelSelection(conn, config, session, requestedModel, selection) {
-    const available = Array.isArray(session?.models?.availableModels)
-        ? session.models.availableModels
-        : [];
-    let modelId = selection.values?.[requestedModel];
-    if (modelId === undefined) {
-        const direct = available.find(
-            (m) => m && (m.modelId === requestedModel || m.name === requestedModel),
-        );
-        if (direct) modelId = direct.modelId;
-    }
-    if (modelId === undefined || modelId === null || modelId === "") {
-        if (selection.required)
-            throw new AcpError(
-                `agent ${config.instanceId ?? config.name} cannot map requested model ${JSON.stringify(requestedModel)} to a Gemini availableModels entry`,
-            );
-        return null;
-    }
-    const allowed = available.length === 0 || available.some((m) => m?.modelId === modelId);
-    if (!allowed) {
-        if (selection.required)
-            throw new AcpError(
-                `agent ${config.instanceId ?? config.name} availableModels does not include modelId ${JSON.stringify(modelId)} for requested model ${JSON.stringify(requestedModel)}`,
-            );
-        return null;
-    }
-    await conn.setSessionModel(session.sessionId, modelId);
-    return modelId;
+function currentModelValue(session, preferredConfigId) {
+    const option = findConfigOption(session?.configOptions, preferredConfigId);
+    const current = option?.currentValue ?? option?.current_value;
+    return current === undefined || current === null || current === ""
+        ? null
+        : String(current);
 }
 function findConfigOption(options, preferredId) {
     if (!Array.isArray(options)) return null;
@@ -827,7 +789,7 @@ function flattenOptionValues(options) {
     const out = [];
     for (const item of Array.isArray(options) ? options : []) {
         if (!item || typeof item !== "object") continue;
-        if (Object.prototype.hasOwnProperty.call(item, "value"))
+        if (Object.hasOwn(item, "value"))
             out.push({
                 value: String(item.value),
                 name: item.name == null ? "" : String(item.name),
