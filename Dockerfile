@@ -4,7 +4,7 @@ WORKDIR /app
 # Override either ACP_GLOBAL_PACKAGES (to pin agent CLI versions) or
 # ACP_PROXY_VERSION (to stamp the version reported in ACP initialize) at
 # build time with --build-arg.
-ARG ACP_GLOBAL_PACKAGES="@google/gemini-cli@latest @agentclientprotocol/claude-agent-acp@latest @github/copilot@latest"
+ARG ACP_GLOBAL_PACKAGES="opencode-ai@latest @agentclientprotocol/claude-agent-acp@latest @github/copilot@latest"
 ARG ACP_PROXY_VERSION=unknown
 ENV NPM_CONFIG_FUND=false \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
@@ -13,7 +13,7 @@ ENV NPM_CONFIG_FUND=false \
 RUN set -eux; \
     npm install -g --no-fund --no-update-notifier ${ACP_GLOBAL_PACKAGES}; \
     npm cache clean --force; \
-    mkdir -p /auth/gemini-a /auth/gemini-b /auth/claude-ka /auth/github-gpt-5-mini-ka; \
+    mkdir -p /auth/opencode-a /auth/opencode-b /auth/claude-ka /auth/github-gpt-5-mini-ka; \
     chown -R node:node /auth
 
 COPY --chown=node:node src ./src
