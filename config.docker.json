@@ -14,30 +14,50 @@
   },
   "agents": [
     {
-      "name": "gemini",
-      "instance_id": "gemini-a",
-      "command": "gemini",
-      "args": ["--model", "auto", "--experimental-acp"],
+      "name": "opencode",
+      "instance_id": "opencode-a",
+      "command": "opencode",
+      "args": ["acp"],
       "cwd": ".",
-      "models": ["gemini"],
+      "models": ["opencode-big-pickle", "opencode-mimo", "opencode-nemotron"],
+      "model_selection": {
+        "type": "session_config",
+        "config_id": "model",
+        "values": {
+          "opencode-big-pickle": "opencode/big-pickle",
+          "opencode-mimo":       "opencode/mimo-v2.5-free",
+          "opencode-nemotron":   "opencode/nemotron-3-ultra-free"
+        },
+        "required": true
+      },
       "env": {
-        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}",
-        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-a",
-        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-a"
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a",
+        "XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share",
+        "XDG_CONFIG_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.config"
       },
       "permission": "deny"
     },
     {
-      "name": "gemini",
-      "instance_id": "gemini-b",
-      "command": "gemini",
-      "args": ["--model", "auto", "--experimental-acp"],
+      "name": "opencode",
+      "instance_id": "opencode-b",
+      "command": "opencode",
+      "args": ["acp"],
       "cwd": ".",
-      "models": ["gemini"],
+      "models": ["opencode-big-pickle", "opencode-mimo", "opencode-nemotron"],
+      "model_selection": {
+        "type": "session_config",
+        "config_id": "model",
+        "values": {
+          "opencode-big-pickle": "opencode/big-pickle",
+          "opencode-mimo":       "opencode/mimo-v2.5-free",
+          "opencode-nemotron":   "opencode/nemotron-3-ultra-free"
+        },
+        "required": true
+      },
       "env": {
-        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_B}",
-        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-b",
-        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-b"
+        "HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b",
+        "XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b/.local/share",
+        "XDG_CONFIG_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b/.config"
       },
       "permission": "deny"
     },

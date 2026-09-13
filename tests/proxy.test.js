@@ -36,7 +36,7 @@ function agent(name, label, extraEnv = {}) {
     command: process.execPath,
     args: [FAKE],
     cwd: '.',
-    models: ['gemini'],
+    models: ['opencode'],
     env: { ACP_FAKE_LABEL: label, ...extraEnv },
     permission: 'deny'
   };
@@ -104,11 +104,11 @@ test('logger supports text output format', () => {
 test('config normalizes logging options', () => {
   const cfg = config({
     server: { ...baseServer, logging: { level: 'warn', format: 'text' } },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   });
   assert.deepEqual(cfg.logging, { level: 'warn', format: 'text' });
-  assert.throws(() => config({ server: { ...baseServer, logging: { format: 'xml' } }, agents: [agent('gemini', 'a')] }), /logging\.format/);
-  assert.throws(() => config({ server: { ...baseServer, logging: { level: 'trace' } }, agents: [agent('gemini', 'a')] }), /logging\.level/);
+  assert.throws(() => config({ server: { ...baseServer, logging: { format: 'xml' } }, agents: [agent('opencode', 'a')] }), /logging\.format/);
+  assert.throws(() => config({ server: { ...baseServer, logging: { level: 'trace' } }, agents: [agent('opencode', 'a')] }), /logging\.level/);
 });
 
 
@@ -119,16 +119,16 @@ test('agent env supports {var:NAME} expansion and rejects removed env_sections',
     const cfg = config({
       server: baseServer,
       agents: [{
-        name: 'gemini',
+        name: 'opencode',
         command: process.execPath,
         args: [FAKE],
-        models: ['gemini'],
-        env: { GEMINI_API_KEY: '{var:ACP_PROXY_TEST_SECRET}' }
+        models: ['opencode'],
+        env: { OPENCODE_API_KEY: '{var:ACP_PROXY_TEST_SECRET}' }
       }]
     });
-    assert.equal(cfg.agents[0].env.GEMINI_API_KEY, 'expanded-secret');
-    assert.throws(() => config({ env_sections: { old: {} }, agents: [agent('gemini', 'a')] }), /env_sections/);
-    assert.throws(() => config({ agents: [{ ...agent('gemini', 'a'), env_section: 'old' }] }), /env_section/);
+    assert.equal(cfg.agents[0].env.OPENCODE_API_KEY, 'expanded-secret');
+    assert.throws(() => config({ env_sections: { old: {} }, agents: [agent('opencode', 'a')] }), /env_sections/);
+    assert.throws(() => config({ agents: [{ ...agent('opencode', 'a'), env_section: 'old' }] }), /env_section/);
   } finally {
     if (old === undefined) delete process.env.ACP_PROXY_TEST_SECRET;
     else process.env.ACP_PROXY_TEST_SECRET = old;
@@ -173,10 +173,10 @@ test('config supports {file:...} expansion for secrets', () => {
 
     const cfg = config({
       server: { ...baseServer, apiKey: `{file:${apiKeyFile}}` },
-      agents: [agent('gemini', 'a', { GEMINI_API_KEY: `{file:${secretFile}}` })]
+      agents: [agent('opencode', 'a', { OPENCODE_API_KEY: `{file:${secretFile}}` })]
     });
     assert.equal(cfg.server.apiKey, 'api-secret');
-    assert.equal(cfg.agents[0].env.GEMINI_API_KEY, 'file-secret');
+    assert.equal(cfg.agents[0].env.OPENCODE_API_KEY, 'file-secret');
   } finally {
     if (previousDir === undefined) delete process.env.ACP_PROXY_FILE_DIR;
     else process.env.ACP_PROXY_FILE_DIR = previousDir;
@@ -200,9 +200,9 @@ test('access log carries request_model and response_model', async () => {
   const app = new AcpOpenAiServer(config({
     server: { ...baseServer },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'upstream-flash-lite,upstream-pro' }),
-      models: ['gemini-flash-lite'],
-      model_selection: { values: { 'gemini-flash-lite': 'upstream-flash-lite' }, required: true }
+      ...agent('opencode', 'a', { ACP_FAKE_MODEL_OPTIONS: 'upstream-flash-lite,upstream-pro' }),
+      models: ['opencode-flash-lite'],
+      model_selection: { values: { 'opencode-flash-lite': 'upstream-flash-lite' }, required: true }
     }]
   }), { logger: recordingLogger });
   await app.startAtBoot();
@@ -211,7 +211,7 @@ test('access log carries request_model and response_model', async () => {
     const r = await fetch(`http://${address.address}:${address.port}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
-      body: JSON.stringify({ model: 'gemini-flash-lite', messages: [{ role: 'user', content: 'hi' }] })
+      body: JSON.stringify({ model: 'opencode-flash-lite', messages: [{ role: 'user', content: 'hi' }] })
     });
     assert.equal(r.status, 200);
   } finally {
@@ -219,7 +219,7 @@ test('access log carries request_model and response_model', async () => {
   }
   const httpLog = captured.find((c) => c.msg === 'http request' && c.fields?.path === '/v1/chat/completions');
   assert.ok(httpLog, 'expected an http request log line');
-  assert.equal(httpLog.fields.request_model, 'gemini-flash-lite');
+  assert.equal(httpLog.fields.request_model, 'opencode-flash-lite');
   assert.equal(httpLog.fields.response_model, 'upstream-flash-lite');
   assert.match(httpLog.fields.request_id, /^req_[0-9a-f]+$/);
 });
@@ -228,12 +228,12 @@ test('model_selection rejects a value the agent does not list when required', as
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1, failureCooldownSeconds: 0 },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
-      models: ['gemini'],
-      model_selection: { required: true, values: { 'gemini': 'unobtainium' } }
+      ...agent('opencode', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
+      models: ['opencode'],
+      model_selection: { required: true, values: { 'opencode': 'unobtainium' } }
     }]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hi' }] });
+    const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'hi' }] });
     assert.ok(r.status === 502 || r.status === 400, `expected 4xx/5xx; got ${r.status}`);
     const body = await r.json();
     assert.match(body.error.message, /does not list value/);
@@ -244,7 +244,7 @@ test('model_selection rejects an unknown type', () => {
   assert.throws(
     () => config({
       server: { ...baseServer },
-      agents: [{ ...agent('gemini', 'a'), model_selection: { type: 'whatever' } }]
+      agents: [{ ...agent('opencode', 'a'), model_selection: { type: 'whatever' } }]
     }),
     /must be one of: session_config, auto/
   );
@@ -254,23 +254,23 @@ test('model_selection maps OpenAI model ids to ACP session config values', async
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
-      models: ['gemini-flash', 'gemini-pro'],
+      ...agent('opencode', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
+      models: ['opencode-flash', 'opencode-pro'],
       model_selection: {
         config_id: 'model',
         values: {
-          'gemini-flash': 'flash',
-          'gemini-pro': 'pro'
+          'opencode-flash': 'flash',
+          'opencode-pro': 'pro'
         }
       }
     }]
   }, async ({ baseUrl }) => {
-    const pro = await post(baseUrl, { model: 'gemini-pro', messages: [{ role: 'user', content: 'hello' }] });
+    const pro = await post(baseUrl, { model: 'opencode-pro', messages: [{ role: 'user', content: 'hello' }] });
     assert.equal(pro.status, 200);
     const proBody = await pro.json();
     assert.match(proBody.choices[0].message.content, /Echo\[a\/pro\]/);
 
-    const flash = await post(baseUrl, { model: 'gemini-flash', messages: [{ role: 'user', content: 'hello' }] });
+    const flash = await post(baseUrl, { model: 'opencode-flash', messages: [{ role: 'user', content: 'hello' }] });
     assert.equal(flash.status, 200);
     const flashBody = await flash.json();
     assert.match(flashBody.choices[0].message.content, /Echo\[a\/flash\]/);
@@ -280,32 +280,32 @@ test('model_selection maps OpenAI model ids to ACP session config values', async
 test('duplicate model ids create a pool and round_robin rotates requests', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'round_robin', maxRetries: 1 },
-    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+    agents: [agent('opencode', 'a'), agent('opencode', 'b')]
   }, async ({ baseUrl }) => {
     const models = await fetch(`${baseUrl}/v1/models`, { headers: { authorization: 'Bearer secret' } }).then((r) => r.json());
-    assert.deepEqual(models.data[0].acp_agents, ['gemini-a', 'gemini-b']);
+    assert.deepEqual(models.data[0].acp_agents, ['opencode-a', 'opencode-b']);
     const seen = [];
     for (let i = 0; i < 3; i += 1) {
-      const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: `hello ${i}` }] });
+      const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: `hello ${i}` }] });
       assert.equal(r.status, 200);
       seen.push(r.headers.get('x-acp-agent'));
       const body = await r.json();
       assert.match(body.choices[0].message.content, /Echo\[[ab]\]/);
     }
-    assert.deepEqual(seen, ['gemini-a', 'gemini-b', 'gemini-a']);
+    assert.deepEqual(seen, ['opencode-a', 'opencode-b', 'opencode-a']);
   });
 });
 
 test('primary_failover retries next runtime for quota-like failures', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
-    agents: [agent('gemini', 'bad', { ACP_FAKE_FAIL_PROMPT: 'rate_limit' }), agent('gemini', 'good')]
+    agents: [agent('opencode', 'bad', { ACP_FAKE_FAIL_PROMPT: 'rate_limit' }), agent('opencode', 'good')]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hello' }] });
+    const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'hello' }] });
     assert.equal(r.status, 200);
-    assert.equal(r.headers.get('x-acp-agent'), 'gemini-good');
+    assert.equal(r.headers.get('x-acp-agent'), 'opencode-good');
     const health = await fetch(`${baseUrl}/health`).then((x) => x.json());
-    const bad = health.models[0].agents.find((a) => a.id === 'gemini-bad');
+    const bad = health.models[0].agents.find((a) => a.id === 'opencode-bad');
     assert.equal(bad.failure_count, 1);
     assert.ok(bad.cooldown_remaining_seconds > 0);
   });
@@ -314,9 +314,9 @@ test('primary_failover retries next runtime for quota-like failures', async () =
 test('all runtimes failing returns 502 after maxRetries full-pool attempts', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'round_robin', maxRetries: 2, failureCooldownSeconds: 0 },
-    agents: [agent('gemini', 'a', { ACP_FAKE_FAIL_PROMPT: 'rate_limit' }), agent('gemini', 'b', { ACP_FAKE_FAIL_PROMPT: 'rate_limit' })]
+    agents: [agent('opencode', 'a', { ACP_FAKE_FAIL_PROMPT: 'rate_limit' }), agent('opencode', 'b', { ACP_FAKE_FAIL_PROMPT: 'rate_limit' })]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hello' }] });
+    const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'hello' }] });
     assert.equal(r.status, 502);
     const body = await r.json();
     assert.match(body.error.message, /after 4 attempt/);
@@ -326,11 +326,11 @@ test('all runtimes failing returns 502 after maxRetries full-pool attempts', asy
 test('sticky_failover keeps the same routing key on the same runtime', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'sticky_failover', maxRetries: 1 },
-    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+    agents: [agent('opencode', 'a'), agent('opencode', 'b')]
   }, async ({ baseUrl }) => {
     const seen = [];
     for (let i = 0; i < 4; i += 1) {
-      const r = await post(baseUrl, { model: 'gemini', user: 'same-user', messages: [{ role: 'user', content: `turn ${i}` }] });
+      const r = await post(baseUrl, { model: 'opencode', user: 'same-user', messages: [{ role: 'user', content: `turn ${i}` }] });
       assert.equal(r.status, 200);
       seen.push(r.headers.get('x-acp-agent'));
     }
@@ -341,10 +341,10 @@ test('sticky_failover keeps the same routing key on the same runtime', async () 
 test('multimodal data URI image is forwarded to ACP image block', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const r = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       messages: [{ role: 'user', content: [
         { type: 'text', text: 'describe' },
         { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } }
@@ -359,10 +359,10 @@ test('multimodal data URI image is forwarded to ACP image block', async () => {
 test('OpenAI client-side tools return chat tool_calls for the client to execute', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover' },
-    agents: [agent('gemini', 'a', { ACP_FAKE_TOOL_CALL: 'get_weather:{"location":"New York, USA"}' })]
+    agents: [agent('opencode', 'a', { ACP_FAKE_TOOL_CALL: 'get_weather:{"location":"New York, USA"}' })]
   }, async ({ baseUrl }) => {
     const r = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       tools: [{ type: 'function', function: { name: 'get_weather', description: 'Get current weather', parameters: { type: 'object', properties: { location: { type: 'string' } }, required: ['location'] } } }],
       tool_choice: 'auto',
       messages: [{ role: 'user', content: 'weather in New York' }]
@@ -380,10 +380,10 @@ test('OpenAI client-side tools return chat tool_calls for the client to execute'
 test('chat streaming buffers client tool calls and emits tool_call deltas', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover' },
-    agents: [agent('gemini', 'a', { ACP_FAKE_TOOL_CALL: 'get_weather:{"location":"New York, USA"}' })]
+    agents: [agent('opencode', 'a', { ACP_FAKE_TOOL_CALL: 'get_weather:{"location":"New York, USA"}' })]
   }, async ({ baseUrl }) => {
     const r = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       stream: true,
       tools: [{ type: 'function', function: { name: 'get_weather', parameters: { type: 'object', properties: { location: { type: 'string' } }, required: ['location'] } } }],
       messages: [{ role: 'user', content: 'weather in New York' }]
@@ -400,12 +400,12 @@ test('chat streaming buffers client tool calls and emits tool_call deltas', asyn
 test('chat streaming emits SSE chunks and DONE', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'round_robin', maxRetries: 1 },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'stream me' }] });
+    const r = await post(baseUrl, { model: 'opencode', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'stream me' }] });
     if (r.status !== 200) assert.fail(await r.text());
     assert.equal(r.headers.get('content-type').startsWith('text/event-stream'), true);
-    assert.equal(r.headers.get('x-acp-agent'), 'gemini-a');
+    assert.equal(r.headers.get('x-acp-agent'), 'opencode-a');
     const text = await r.text();
     assert.match(text, /chat\.completion\.chunk/);
     assert.match(text, /"usage"/);
@@ -416,9 +416,9 @@ test('chat streaming emits SSE chunks and DONE', async () => {
 test('streaming usage emits finish chunk without usage then a separate choices:[] usage chunk', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'round_robin' },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'hi' }] });
+    const r = await post(baseUrl, { model: 'opencode', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(r.status, 200);
     const lines = (await r.text()).split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
     const finishChunk = lines.find((c) => c.choices?.[0]?.finish_reason === 'stop');
@@ -433,10 +433,10 @@ test('streaming usage emits finish chunk without usage then a separate choices:[
 test('image capability gating returns 400 when agent does not advertise image support', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
-    agents: [agent('gemini', 'a', { ACP_FAKE_NO_IMAGE: '1' })]
+    agents: [agent('opencode', 'a', { ACP_FAKE_NO_IMAGE: '1' })]
   }, async ({ baseUrl }) => {
     const r = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } }] }]
     });
     assert.equal(r.status, 400);
@@ -449,12 +449,12 @@ test('model_selection with required:false succeeds when requested model id has n
   await withApp({
     server: { ...baseServer },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
-      models: ['gemini'],
-      model_selection: { config_id: 'model', required: false, values: { 'gemini-flash': 'flash' } }
+      ...agent('opencode', 'a', { ACP_FAKE_MODEL_OPTIONS: 'flash,pro' }),
+      models: ['opencode'],
+      model_selection: { config_id: 'model', required: false, values: { 'opencode-flash': 'flash' } }
     }]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hello' }] });
+    const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'hello' }] });
     assert.equal(r.status, 200);
   });
 });
@@ -462,9 +462,9 @@ test('model_selection with required:false succeeds when requested model id has n
 test('max_request_bytes config enforces 413 for oversized bodies', async () => {
   await withApp({
     server: { ...baseServer, maxRequestBytes: 1024 },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'x'.repeat(1100) }] });
+    const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'x'.repeat(1100) }] });
     assert.equal(r.status, 413);
   });
 });
@@ -472,11 +472,11 @@ test('max_request_bytes config enforces 413 for oversized bodies', async () => {
 test('conversation_id body field provides sticky routing affinity', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'sticky_failover', maxRetries: 1 },
-    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+    agents: [agent('opencode', 'a'), agent('opencode', 'b')]
   }, async ({ baseUrl }) => {
     const seen = [];
     for (let i = 0; i < 3; i += 1) {
-      const r = await post(baseUrl, { model: 'gemini', conversation_id: 'convo-xyz', messages: [{ role: 'user', content: `turn ${i}` }] });
+      const r = await post(baseUrl, { model: 'opencode', conversation_id: 'convo-xyz', messages: [{ role: 'user', content: `turn ${i}` }] });
       assert.equal(r.status, 200);
       seen.push(r.headers.get('x-acp-agent'));
     }
@@ -486,35 +486,35 @@ test('conversation_id body field provides sticky routing affinity', async () => 
 
 test('config rejects non-numeric max_request_bytes (closes NaN bypass)', () => {
   assert.throws(
-    () => config({ server: { ...baseServer, max_request_bytes: 'oops' }, agents: [agent('gemini', 'a')] }),
+    () => config({ server: { ...baseServer, max_request_bytes: 'oops' }, agents: [agent('opencode', 'a')] }),
     /max_request_bytes/
   );
   assert.throws(
-    () => config({ server: { ...baseServer, port: 'not-a-number' }, agents: [agent('gemini', 'a')] }),
+    () => config({ server: { ...baseServer, port: 'not-a-number' }, agents: [agent('opencode', 'a')] }),
     /server\.port/
   );
   assert.throws(
-    () => config({ server: { ...baseServer, requestTimeoutSeconds: 'soon' }, agents: [agent('gemini', 'a')] }),
+    () => config({ server: { ...baseServer, requestTimeoutSeconds: 'soon' }, agents: [agent('opencode', 'a')] }),
     /request_timeout_seconds/
   );
 });
 
 test('config rejects empty api_key explicitly', () => {
   assert.throws(
-    () => config({ server: { ...baseServer, apiKey: '' }, agents: [agent('gemini', 'a')] }),
+    () => config({ server: { ...baseServer, apiKey: '' }, agents: [agent('opencode', 'a')] }),
     /api_key is set but empty/
   );
 });
 
 test('config rejects non-loopback host without api_key unless allow_unauthenticated', () => {
   assert.throws(
-    () => config({ server: { host: '0.0.0.0', port: 0 }, agents: [agent('gemini', 'a')] }),
+    () => config({ server: { host: '0.0.0.0', port: 0 }, agents: [agent('opencode', 'a')] }),
     /api_key is required when server\.host/
   );
   // Explicit opt-in succeeds
   const cfg = config({
     server: { host: '0.0.0.0', port: 0, allow_unauthenticated: true },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   });
   assert.equal(cfg.server.host, '0.0.0.0');
 });
@@ -522,7 +522,7 @@ test('config rejects non-loopback host without api_key unless allow_unauthentica
 test('bearer auth accepts lowercase scheme and rejects mismatched length', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const ok = await fetch(`${baseUrl}/v1/models`, { headers: { authorization: 'bearer secret' } });
     assert.equal(ok.status, 200);
@@ -573,9 +573,9 @@ test('env_passthrough default does not leak unrelated parent env to agent', asyn
   try {
     await withApp({
       server: { ...baseServer },
-      agents: [agent('gemini', 'a')]
+      agents: [agent('opencode', 'a')]
     }, async ({ baseUrl }) => {
-      const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hi' }] });
+      const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'hi' }] });
       assert.equal(r.status, 200);
       const body = await r.json();
       assert.doesNotMatch(body.choices[0].message.content, /leaky-secret-abc/, 'agent should not see ACP_FAKE_LEAK_TEST');
@@ -592,9 +592,9 @@ test('env_passthrough wildcard inherits all parent env to agent', async () => {
   try {
     await withApp({
       server: { ...baseServer, env_passthrough: ['*'] },
-      agents: [agent('gemini', 'a')]
+      agents: [agent('opencode', 'a')]
     }, async ({ baseUrl }) => {
-      const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'hi' }] });
+      const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'hi' }] });
       assert.equal(r.status, 200);
       const body = await r.json();
       assert.match(body.choices[0].message.content, /inherited-xyz/, 'agent should see the parent env when wildcard is set');
@@ -608,14 +608,14 @@ test('env_passthrough wildcard inherits all parent env to agent', async () => {
 test('X-ACP-Routing-Key header keeps requests on the same runtime under sticky_failover', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'sticky_failover', maxRetries: 1 },
-    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+    agents: [agent('opencode', 'a'), agent('opencode', 'b')]
   }, async ({ baseUrl }) => {
     const seen = [];
     for (let i = 0; i < 4; i += 1) {
       const r = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer secret', 'x-acp-routing-key': 'header-keyed' },
-        body: JSON.stringify({ model: 'gemini', messages: [{ role: 'user', content: `turn ${i}` }] })
+        body: JSON.stringify({ model: 'opencode', messages: [{ role: 'user', content: `turn ${i}` }] })
       });
       assert.equal(r.status, 200);
       seen.push(r.headers.get('x-acp-agent'));
@@ -627,20 +627,20 @@ test('X-ACP-Routing-Key header keeps requests on the same runtime under sticky_f
 test('least_busy strategy picks the idle runtime', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'least_busy', maxRetries: 1 },
-    agents: [agent('gemini', 'a'), agent('gemini', 'b')]
+    agents: [agent('opencode', 'a'), agent('opencode', 'b')]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'pick one' }] });
+    const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'pick one' }] });
     assert.equal(r.status, 200);
-    assert.match(r.headers.get('x-acp-agent') ?? '', /gemini-[ab]/);
+    assert.match(r.headers.get('x-acp-agent') ?? '', /opencode-[ab]/);
   });
 });
 
 test('agent exit mid-stream surfaces a clean error to the client', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1, failureCooldownSeconds: 0 },
-    agents: [agent('gemini', 'a', { ACP_FAKE_FAIL_PROMPT: 'exit' })]
+    agents: [agent('opencode', 'a', { ACP_FAKE_FAIL_PROMPT: 'exit' })]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'crash please' }] });
+    const r = await post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'crash please' }] });
     assert.ok(r.status === 502 || r.status === 503, `expected 502/503 for agent exit; got ${r.status}`);
     const body = await r.json();
     assert.ok(body.error, 'response should be an OpenAI-shaped error');
@@ -663,7 +663,7 @@ test('extractClientToolCalls is strict by default and loose under compat flag', 
 test('responses carry an x-request-id header', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const r = await fetch(`${baseUrl}/health`);
     assert.match(r.headers.get('x-request-id') ?? '', /^req_[0-9a-f]+$/);
@@ -673,7 +673,7 @@ test('responses carry an x-request-id header', async () => {
 test('/readyz returns 200 when no startAtBoot agents are configured', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const r = await fetch(`${baseUrl}/readyz`);
     assert.equal(r.status, 200);
@@ -708,10 +708,10 @@ test('logger redacts bearer/sk-/github tokens and truncates long stacks', async 
 test('max_queue_depth rejects excess concurrent requests with 503 + Retry-After', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [{ ...agent('gemini', 'a', { ACP_FAKE_PROMPT_DELAY_MS: '300' }), max_queue_depth: 2 }]
+    agents: [{ ...agent('opencode', 'a', { ACP_FAKE_PROMPT_DELAY_MS: '300' }), max_queue_depth: 2 }]
   }, async ({ baseUrl }) => {
     const responses = await Promise.all([1, 2, 3, 4].map(() =>
-      post(baseUrl, { model: 'gemini', messages: [{ role: 'user', content: 'queue test' }] })
+      post(baseUrl, { model: 'opencode', messages: [{ role: 'user', content: 'queue test' }] })
     ));
     const statuses = responses.map((r) => r.status).sort();
     assert.deepEqual(statuses, [200, 200, 200, 503], `expected three 200s and one 503; got ${statuses}`);
@@ -726,24 +726,24 @@ test('resource_links policy can deny file:// URIs and private networks', async (
       ...baseServer,
       resource_links: { allowed_schemes: ['https'], allow_file_uri: false, deny_private_networks: true }
     },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const fileUri = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'file:///etc/passwd' } }] }]
     });
     assert.equal(fileUri.status, 400);
     assert.match((await fileUri.json()).error.message, /file:\/\/ URIs are not allowed/);
 
     const linkLocal = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'http://169.254.169.254/latest/meta-data/' } }] }]
     });
     assert.equal(linkLocal.status, 400);
     assert.match((await linkLocal.json()).error.message, /allowed_schemes|private/);
 
     const allowed = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/x.png' } }] }]
     });
     assert.equal(allowed.status, 200);
@@ -753,10 +753,10 @@ test('resource_links policy can deny file:// URIs and private networks', async (
 test('resource_links default policy is permissive (no behaviour change for existing configs)', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const r = await post(baseUrl, {
-      model: 'gemini',
+      model: 'opencode',
       messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'file:///workspace/file.txt' } }] }]
     });
     assert.equal(r.status, 200);
@@ -766,9 +766,9 @@ test('resource_links default policy is permissive (no behaviour change for exist
 test('chat streaming first chunk delta carries role assistant', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
-    const r = await post(baseUrl, { model: 'gemini', stream: true, messages: [{ role: 'user', content: 'hi' }] });
+    const r = await post(baseUrl, { model: 'opencode', stream: true, messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(r.status, 200);
     const text = await r.text();
     const lines = text.split('\n').filter((l) => l.startsWith('data: ') && l !== 'data: [DONE]').map((l) => JSON.parse(l.slice(6)));
@@ -780,12 +780,12 @@ test('chat streaming first chunk delta carries role assistant', async () => {
 test('/v1/responses streaming emits response.output_text.done before completed', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const r = await fetch(`${baseUrl}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
-      body: JSON.stringify({ model: 'gemini', stream: true, input: 'hi' })
+      body: JSON.stringify({ model: 'opencode', stream: true, input: 'hi' })
     });
     assert.equal(r.status, 200);
     const text = await r.text();
@@ -801,12 +801,12 @@ test('/v1/responses streaming emits response.output_text.done before completed',
 test('responses status maps incomplete stopReason to status:incomplete', async () => {
   await withApp({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a', { ACP_FAKE_STOP_REASON: 'max_tokens' })]
+    agents: [agent('opencode', 'a', { ACP_FAKE_STOP_REASON: 'max_tokens' })]
   }, async ({ baseUrl }) => {
     const r = await fetch(`${baseUrl}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
-      body: JSON.stringify({ model: 'gemini', input: 'hi' })
+      body: JSON.stringify({ model: 'opencode', input: 'hi' })
     });
     assert.equal(r.status, 200);
     const body = await r.json();
@@ -822,7 +822,7 @@ test('client abort during streaming propagates session/cancel to the agent', asy
   writeFileSync(cancelLog, '');
   const app = new AcpOpenAiServer(config({
     server: { ...baseServer },
-    agents: [agent('gemini', 'a', { ACP_FAKE_SLOW_STREAM_MS: '60', ACP_FAKE_CANCEL_LOG: cancelLog })]
+    agents: [agent('opencode', 'a', { ACP_FAKE_SLOW_STREAM_MS: '60', ACP_FAKE_CANCEL_LOG: cancelLog })]
   }), { logger: createLogger({ level: 'silent' }) });
   await app.startAtBoot();
   const address = await app.listen();
@@ -832,7 +832,7 @@ test('client abort during streaming propagates session/cancel to the agent', asy
     const r = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
-      body: JSON.stringify({ model: 'gemini', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+      body: JSON.stringify({ model: 'opencode', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
       signal: ctrl.signal
     });
     const reader = r.body.getReader();
@@ -853,7 +853,7 @@ test('session config selection reports the upstream model in response headers', 
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover', maxRetries: 1 },
     agents: [{
-      ...agent('gemini', 'a', { ACP_FAKE_MODEL_OPTIONS: 'upstream-pro,upstream-flash,upstream-flash-lite' }),
+      ...agent('opencode', 'a', { ACP_FAKE_MODEL_OPTIONS: 'upstream-pro,upstream-flash,upstream-flash-lite' }),
       models: ['flash-lite', 'flash', 'pro'],
       model_selection: {
         type: 'session_config',
@@ -881,13 +881,13 @@ test('session config selection reports the upstream model in response headers', 
 test('/v1/responses non-streaming with multimodal data URI image', async () => {
   await withApp({
     server: { ...baseServer, routingStrategy: 'primary_failover' },
-    agents: [agent('gemini', 'a')]
+    agents: [agent('opencode', 'a')]
   }, async ({ baseUrl }) => {
     const r = await fetch(`${baseUrl}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
       body: JSON.stringify({
-        model: 'gemini',
+        model: 'opencode',
         input: [{ role: 'user', content: [
           { type: 'input_text', text: 'describe' },
           { type: 'input_image', image_url: 'data:image/png;base64,aGVsbG8=' }

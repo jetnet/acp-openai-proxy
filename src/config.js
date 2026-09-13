@@ -23,25 +23,51 @@ export function defaultConfigText() {
     },
     agents: [
       {
-        name: 'gemini',
-        instance_id: 'gemini-a',
+        name: 'opencode',
+        instance_id: 'opencode-a',
         command: 'npx',
-        args: ['-y', '@google/gemini-cli@latest', '--model', 'auto', '--experimental-acp'],
+        args: ['-y', 'opencode-ai@latest', 'acp'],
         cwd: '.',
-        models: ['gemini'],
-        env: { GEMINI_API_KEY: '{var:GEMINI_API_KEY_A}' },
+        models: ['opencode-big-pickle', 'opencode-mimo', 'opencode-nemotron'],
+        model_selection: {
+          type: 'session_config',
+          config_id: 'model',
+          values: {
+            'opencode-big-pickle': 'opencode/big-pickle',
+            'opencode-mimo': 'opencode/mimo-v2.5-free',
+            'opencode-nemotron': 'opencode/nemotron-3-ultra-free'
+          },
+          required: true
+        },
+        env: {
+          XDG_DATA_HOME: '${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share',
+          XDG_CONFIG_HOME: '${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.config'
+        },
         permission: 'deny',
         expose_tool_updates: false,
         start_at_boot: false
       },
       {
-        name: 'gemini',
-        instance_id: 'gemini-b',
+        name: 'opencode',
+        instance_id: 'opencode-b',
         command: 'npx',
-        args: ['-y', '@google/gemini-cli@latest', '--model', 'auto', '--experimental-acp'],
+        args: ['-y', 'opencode-ai@latest', 'acp'],
         cwd: '.',
-        models: ['gemini'],
-        env: { GEMINI_API_KEY: '{var:GEMINI_API_KEY_B}' },
+        models: ['opencode-big-pickle', 'opencode-mimo', 'opencode-nemotron'],
+        model_selection: {
+          type: 'session_config',
+          config_id: 'model',
+          values: {
+            'opencode-big-pickle': 'opencode/big-pickle',
+            'opencode-mimo': 'opencode/mimo-v2.5-free',
+            'opencode-nemotron': 'opencode/nemotron-3-ultra-free'
+          },
+          required: true
+        },
+        env: {
+          XDG_DATA_HOME: '${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b/.local/share',
+          XDG_CONFIG_HOME: '${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b/.config'
+        },
         permission: 'deny',
         expose_tool_updates: false,
         start_at_boot: false

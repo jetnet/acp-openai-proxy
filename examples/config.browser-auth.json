@@ -74,55 +74,46 @@
             "assume_authed": true
         },
         {
-            "name": "gemini",
-            "instance_id": "gemini-jn",
+            "_comment": "OPENCODE, second login — free opencode models. Separate XDG state dir means a separate 'opencode auth login', so this instance can use a different account than opencode-a.",
+            "name": "opencode",
+            "instance_id": "opencode-b",
             "command": "npx",
-            "args": [
-                "-y",
-                "@google/gemini-cli@latest",
-                "--model",
-                "auto",
-                "--acp",
-                "--skip-trust"
-            ],
-            "models": ["gemini-pro", "gemini-flash", "gemini-flash-lite"],
+            "args": ["-y", "opencode-ai@latest", "acp"],
+            "models": ["free-mimo", "free-nemotron", "free-ling"],
             "model_selection": {
-                "type": "gemini",
+                "type": "session_config",
                 "values": {
-                    "gemini-pro": "gemini-3.1-pro-preview",
-                    "gemini-flash": "gemini-3-flash-preview",
-                    "gemini-flash-lite": "gemini-3.1-flash-lite-preview"
-                },
-                "required": true
-            },
-            "env": { "GEMINI_CLI_HOME": "/home/user/.gemini.userz" },
-            "permission": "deny",
-            "assume_authed": true
-        },
-        {
-            "name": "gemini",
-            "instance_id": "gemini-dv",
-            "command": "npx",
-            "args": [
-                "-y",
-                "@google/gemini-cli@latest",
-                "--model",
-                "auto",
-                "--acp",
-                "--skip-trust"
-            ],
-            "models": ["gemini-pro", "gemini-flash", "gemini-flash-lite"],
-            "model_selection": {
-                "type": "gemini",
-                "values": {
-                    "gemini-pro": "gemini-3.1-pro-preview",
-                    "gemini-flash": "gemini-3-flash-preview",
-                    "gemini-flash-lite": "gemini-3.1-flash-lite-preview"
+                    "free-mimo": "opencode/mimo-v2.5-free",
+                    "free-nemotron": "opencode/nemotron-3-ultra-free",
+                    "free-ling": "opencode/ling-3.0-flash-fin-free"
                 },
                 "required": true
             },
             "env": {
-                "GEMINI_CLI_HOME": "/home/user"
+                "XDG_DATA_HOME": "/home/user/.acp-auth/opencode-b/.local/share",
+                "XDG_CONFIG_HOME": "/home/user/.acp-auth/opencode-b/.config"
+            },
+            "permission": "deny",
+            "assume_authed": true
+        },
+        {
+            "name": "opencode",
+            "instance_id": "opencode-c",
+            "command": "npx",
+            "args": ["-y", "opencode-ai@latest", "acp"],
+            "models": ["free-mimo", "free-nemotron", "free-ling"],
+            "model_selection": {
+                "type": "session_config",
+                "values": {
+                    "free-mimo": "opencode/mimo-v2.5-free",
+                    "free-nemotron": "opencode/nemotron-3-ultra-free",
+                    "free-ling": "opencode/ling-3.0-flash-fin-free"
+                },
+                "required": true
+            },
+            "env": {
+                "XDG_DATA_HOME": "/home/user/.acp-auth/opencode-c/.local/share",
+                "XDG_CONFIG_HOME": "/home/user/.acp-auth/opencode-c/.config"
             },
             "permission": "deny",
             "assume_authed": true

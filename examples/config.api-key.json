@@ -14,34 +14,6 @@
   },
   "agents": [
     {
-      "_comment": "GEMINI CLI — API key. model_selection: NOT supported (session/new returns no configOptions). One agent block per model. GEMINI_API_KEY from https://aistudio.google.com/apikey.",
-      "name": "gemini",
-      "instance_id": "gemini-a",
-      "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-      "cwd": ".",
-      "models": ["gemini"],
-      "env": {
-        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_A}",
-        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-a"
-      },
-      "permission": "deny"
-    },
-    {
-      "name": "gemini",
-      "instance_id": "gemini-b",
-      "command": "npx",
-      "args": ["-y", "@google/gemini-cli@latest", "--model", "auto", "--experimental-acp"],
-      "cwd": ".",
-      "models": ["gemini"],
-      "env": {
-        "GEMINI_API_KEY": "{var:GEMINI_API_KEY_B}",
-        "GEMINI_CLI_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/gemini-b"
-      },
-      "permission": "deny"
-    },
-
-    {
       "_comment": "CLAUDE AGENT ACP — API key. model_selection: SUPPORTED (confirmed via session/new). configId=model, ACP values: default=Sonnet 4.6, opus=Opus 4.7, haiku=Haiku 4.5, opus[1m]=Opus 4.7 1M ctx. ANTHROPIC_API_KEY from https://console.anthropic.com/settings/keys.",
       "name": "claude",
       "instance_id": "claude-a",
@@ -165,6 +137,35 @@
         "ANTHROPIC_API_KEY": "{var:ANTHROPIC_API_KEY}",
         "XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.local/share",
         "XDG_CONFIG_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-a/.config"
+      },
+      "permission": "deny"
+    },
+
+    {
+      "_comment": "OPENCODE, second instance — same models, separate API key and separate XDG state dir. Two blocks with the same models form a pool, so the proxy can fail over between accounts.",
+      "name": "opencode",
+      "instance_id": "opencode-b",
+      "command": "npx",
+      "args": ["-y", "opencode-ai@latest", "acp"],
+      "cwd": ".",
+      "models": [
+        "opencode/claude-sonnet-4-6",
+        "opencode/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-6"
+      ],
+      "model_selection": {
+        "type": "session_config",
+        "values": {
+          "opencode/claude-sonnet-4-6": "opencode/claude-sonnet-4-6",
+          "opencode/claude-haiku-4-5":  "opencode/claude-haiku-4-5",
+          "anthropic/claude-sonnet-4-6": "anthropic/claude-sonnet-4-6"
+        },
+        "required": false
+      },
+      "env": {
+        "ANTHROPIC_API_KEY": "{var:ANTHROPIC_API_KEY_B}",
+        "XDG_DATA_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b/.local/share",
+        "XDG_CONFIG_HOME": "${AUTH_ROOT:-$HOME/.acp-auth}/opencode-b/.config"
       },
       "permission": "deny"
     }
